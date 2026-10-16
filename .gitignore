@@ -203,6 +203,12 @@ cython_debug/
 # Temporary file for partial code execution
 tempCodeRunnerFile.py
 
+# Local lecture data and verification artifacts
+*.sqlite3
+*.sqlite3-*
+.test-tmp/
+.qa/
+
 # Ruff stuff:
 .ruff_cache/
 

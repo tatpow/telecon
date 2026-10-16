@@ -1,0 +1,6 @@
+pywebview>=6.2,<7
+playwright>=1.48,<2
+imageio-ffmpeg>=0.6,<0.7
+psutil>=6,<8
+proc-tap==1.1.1; sys_platform == 'win32'
+windows-capture==2.0.1; sys_platform == 'win32'

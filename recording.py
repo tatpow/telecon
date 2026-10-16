@@ -1,0 +1,400 @@
+"""FFmpeg window recording with WASAPI audio from our browser process tree."""
+from __future__ import annotations
+
+import ctypes
+import os
+import queue
+import socket
+import subprocess
+import sys
+import tempfile
+import threading
+import time
+import uuid
+from collections import deque
+from ctypes import wintypes
+from dataclasses import dataclass
+from datetime import datetime
+from pathlib import Path
+
+
+SOURCE_DIR = Path(__file__).resolve().parent
+
+
+class RecordingCancelled(RuntimeError):
+    cancelled = True
+
+
+def recordings_directory(value: str = "") -> Path:
+    destination = (Path(value).expanduser() if value else Path.home() / "Videos" / "Telecon").resolve()
+    if destination.is_relative_to(SOURCE_DIR):
+        raise ValueError("Выберите папку записей вне исходного каталога приложения.")
+    destination.mkdir(parents=True, exist_ok=True)
+    return destination
+
+
+def ffmpeg_executable(value: str = "") -> str:
+    if value:
+        path = Path(value).expanduser().resolve()
+        if not path.is_file():
+            raise ValueError("Не найден указанный ffmpeg.exe.")
+        return str(path)
+    bundled = Path(sys.executable).resolve().parent / "ffmpeg.exe"
+    if bundled.is_file():
+        return str(bundled)
+    import imageio_ffmpeg
+    return imageio_ffmpeg.get_ffmpeg_exe()
+
+
+def _run_command(arguments: list[str], timeout: int = 15):
+    return subprocess.run(arguments, stdin=subprocess.DEVNULL, capture_output=True,
+                          text=True, encoding="utf-8", errors="replace", timeout=timeout,
+                          creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+
+
+def check_recorder(settings: dict | None = None) -> dict:
+    settings = settings or {}
+    if sys.platform != "win32" or sys.getwindowsversion().build < 20348:
+        raise RuntimeError("Захват окна и звука процесса требует Windows 11 или Windows build 20348+.")
+    import psutil  # noqa: F401 - report missing dependencies before joining
+    from proctap import ProcessAudioCapture  # noqa: F401
+    from proctap._native import ProcessLoopback  # noqa: F401
+    from windows_capture import WindowsCapture  # noqa: F401
+    executable = ffmpeg_executable(settings.get("ffmpeg_path", ""))
+    version = _run_command([executable, "-version"])
+    formats = _run_command([executable, "-hide_banner", "-formats"])
+    encoders = _run_command([executable, "-hide_banner", "-encoders"])
+    if any(result.returncode for result in (version, formats, encoders)):
+        raise RuntimeError("FFmpeg не прошёл проверку запуска.")
+    if not all(name in formats.stdout for name in ("rawvideo", "f32le")):
+        raise RuntimeError("FFmpeg не поддерживает входные потоки видео и звука.")
+    if not all(name in encoders.stdout for name in ("libx264", " aac ")):
+        raise RuntimeError("FFmpeg должен поддерживать кодирование libx264 и AAC.")
+    directory = recordings_directory(settings.get("recordings_dir", ""))
+    with tempfile.TemporaryFile(dir=directory) as probe:
+        probe.write(b"telecon directory check")
+    return {"ffmpeg_path": executable, "version": version.stdout.splitlines()[0],
+            "recordings_dir": str(directory), "capture": "Окно Телемоста и звук его процесса"}
+
+
+@dataclass(frozen=True)
+class BrowserTarget:
+    pid: int
+    hwnd: int
+
+
+def browser_target(profile: Path) -> BrowserTarget:
+    """Find only the Chromium root using this app's exact persistent profile."""
+    import psutil
+    expected = os.path.normcase(str(profile.resolve()))
+    candidates = []
+    for process in psutil.process_iter(["pid", "name", "cmdline"]):
+        try:
+            args = process.info["cmdline"] or []
+            if (process.info["name"] or "").lower() not in ("chrome.exe", "chromium.exe"):
+                continue
+            if any(argument.startswith("--type=") for argument in args):
+                continue
+            profiles = [argument.split("=", 1)[1] for argument in args if argument.startswith("--user-data-dir=")]
+            if any(os.path.normcase(str(Path(item).resolve())) == expected for item in profiles):
+                candidates.append(process.info["pid"])
+        except (psutil.Error, OSError):
+            continue
+    if len(candidates) != 1:
+        raise RuntimeError("Не удалось однозначно определить процесс профиля Телемоста.")
+    pid = candidates[0]
+    user = ctypes.WinDLL("user32", use_last_error=True)
+    user.IsWindowVisible.argtypes = [wintypes.HWND]
+    user.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
+    windows = []
+    callback_type = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+
+    def visit(hwnd, _):
+        owner = wintypes.DWORD()
+        user.GetWindowThreadProcessId(hwnd, ctypes.byref(owner))
+        if owner.value == pid and user.IsWindowVisible(hwnd):
+            class_name = ctypes.create_unicode_buffer(256)
+            user.GetClassNameW(wintypes.HWND(hwnd), class_name, len(class_name))
+            if class_name.value == "Chrome_WidgetWin_1":
+                windows.append(int(hwnd))
+        return True
+
+    callback = callback_type(visit)
+    user.EnumWindows.argtypes = [callback_type, wintypes.LPARAM]
+    if not user.EnumWindows(callback, 0) or len(windows) != 1:
+        raise RuntimeError("Для записи оставьте одно окно выделенного браузера Телемоста.")
+    target = BrowserTarget(pid, windows[0])
+    check_target(target)
+    return target
+
+
+def check_target(target: BrowserTarget) -> None:
+    user = ctypes.WinDLL("user32", use_last_error=True)
+    for name in ("IsWindow", "IsWindowVisible", "IsIconic"):
+        getattr(user, name).argtypes = [wintypes.HWND]
+    if not user.IsWindow(target.hwnd) or not user.IsWindowVisible(target.hwnd) or user.IsIconic(target.hwnd):
+        raise RuntimeError("Окно Телемоста закрыто или свёрнуто; запись прервана.")
+    owner = wintypes.DWORD()
+    user.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
+    user.GetWindowThreadProcessId(target.hwnd, ctypes.byref(owner))
+    if owner.value != target.pid:
+        raise RuntimeError("Окно больше не принадлежит процессу Телемоста.")
+    user.OpenInputDesktop.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    user.OpenInputDesktop.restype = wintypes.HANDLE
+    user.CloseDesktop.argtypes = [wintypes.HANDLE]
+    user.GetUserObjectInformationW.argtypes = [wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p,
+                                             wintypes.DWORD, ctypes.POINTER(wintypes.DWORD)]
+    desktop = user.OpenInputDesktop(0, False, 1)
+    if not desktop:
+        raise RuntimeError("Рабочий стол недоступен для записи. Разблокируйте Windows.")
+    try:
+        name, required = ctypes.create_unicode_buffer(256), wintypes.DWORD()
+        if not user.GetUserObjectInformationW(desktop, 2, name, ctypes.sizeof(name), ctypes.byref(required)):
+            raise RuntimeError("Не удалось проверить доступность рабочего стола.")
+        if name.value.lower() != "default":
+            raise RuntimeError("Windows заблокирована или открыт защищённый рабочий стол; запись прервана.")
+    finally:
+        user.CloseDesktop(desktop)
+
+
+def recording_command(executable: str, video_url: str, output: Path) -> list[str]:
+    return [executable, "-hide_banner", "-loglevel", "warning", "-n", "-nostats",
+            "-progress", "pipe:1", "-stats_period", "0.25",
+            "-thread_queue_size", "1024", "-probesize", "32", "-analyzeduration", "0",
+            "-f", "f32le", "-ar", "48000", "-ac", "2", "-i", "pipe:0",
+            "-thread_queue_size", "16", "-f", "rawvideo", "-pixel_format", "bgra",
+            "-video_size", "1920x1080", "-framerate", "15", "-probesize", "32",
+            "-analyzeduration", "0", "-i", video_url,
+            "-map", "1:v:0", "-map", "0:a:0",
+            "-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-pix_fmt", "yuv420p",
+            "-c:a", "aac", "-b:a", "160k", "-shortest", "-shortest_buf_duration", "1", str(output)]
+
+
+class FFmpegRecorder:
+    def __init__(self, target: BrowserTarget, settings: dict, lecture_id: int):
+        self.target = target
+        self.executable = ffmpeg_executable(settings.get("ffmpeg_path", ""))
+        directory = recordings_directory(settings.get("recordings_dir", ""))
+        stamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        self.output = directory / f"{stamp}_lecture-{lecture_id}_{uuid.uuid4().hex[:8]}.mkv"
+        self.process = None
+        self.audio = None
+        self._capture = None
+        self._video_control = None
+        self._video_server = None
+        self._video_connection = None
+        self._video_frame = None
+        self._first_frame = threading.Event()
+        self._queue = queue.Queue(maxsize=1024)
+        self._stopping = threading.Event()
+        self._ready = threading.Event()
+        self._threads = []
+        self._error = None
+        self._log = deque(maxlen=30)
+        self._last_audio = time.monotonic()
+        self._last_frame = time.monotonic()
+        self._frame_count = 0
+        self._audio_bytes = 0
+
+    def _start_video(self, cancel_event):
+        from windows_capture import WindowsCapture
+        import cv2
+        import numpy as np
+        self._capture = WindowsCapture(cursor_capture=False, draw_border=True,
+                                       secondary_window=False, minimum_update_interval=66,
+                                       window_hwnd=self.target.hwnd)
+        def on_frame_arrived(frame, control):
+            if self._stopping.is_set():
+                control.stop()
+                return
+            try:
+                ratio = min(1920 / frame.width, 1080 / frame.height)
+                width, height = max(1, round(frame.width*ratio)), max(1, round(frame.height*ratio))
+                resized = cv2.resize(frame.frame_buffer, (width, height), interpolation=cv2.INTER_AREA)
+                image = np.zeros((1080,1920,4), dtype=np.uint8)
+                x, y = (1920-width)//2, (1080-height)//2
+                image[y:y+height,x:x+width] = resized
+                self._video_frame = image.tobytes()
+                self._first_frame.set()
+            except Exception as exc:
+                self._error = RuntimeError(f"Получение кадров Телемоста прервано: {exc}")
+                control.stop()
+        def on_closed():
+            if not self._stopping.is_set():
+                self._error = RuntimeError("Захват окна Телемоста завершился неожиданно.")
+        self._capture.frame_handler = on_frame_arrived
+        self._capture.closed_handler = on_closed
+        self._video_control = self._capture.start_free_threaded()
+        deadline = time.monotonic()+8
+        while not self._first_frame.wait(.1):
+            if cancel_event is not None and cancel_event.is_set():
+                raise RecordingCancelled("Запуск записи отменён пользователем.")
+            if self._error:
+                raise self._error
+            if time.monotonic()>deadline or self._video_control.is_finished():
+                raise RuntimeError("Windows Graphics Capture не передал изображение окна Телемоста.")
+
+    def _write_video(self):
+        try:
+            while not self._stopping.is_set():
+                try:
+                    connection, _ = self._video_server.accept()
+                    break
+                except socket.timeout:
+                    continue
+            else:
+                return
+            self._video_connection = connection
+            connection.settimeout(3)
+            deadline = time.monotonic()
+            while not self._stopping.is_set():
+                frame = self._video_frame
+                if frame is not None:
+                    connection.sendall(frame)
+                deadline += 1/15
+                self._stopping.wait(max(0, deadline-time.monotonic()))
+        except OSError as exc:
+            if not self._stopping.is_set():
+                self._error = RuntimeError(f"Передача изображения в FFmpeg прервана: {exc}")
+        finally:
+            if self._video_connection is not None:
+                self._video_connection.close()
+
+    def _on_audio(self, data, _frames):
+        if self._stopping.is_set() or not data:
+            return
+        try:
+            self._queue.put_nowait(data)
+            self._last_audio = time.monotonic()
+            self._audio_bytes += len(data)
+        except queue.Full:
+            self._error = RuntimeError("FFmpeg не успевает принимать звук; запись остановлена.")
+
+    def _write_audio(self):
+        try:
+            while not self._stopping.is_set() or not self._queue.empty():
+                try:
+                    data = self._queue.get(timeout=.1)
+                except queue.Empty:
+                    continue
+                self.process.stdin.write(data)
+                self.process.stdin.flush()
+        except (OSError, ValueError) as exc:
+            if not self._stopping.is_set():
+                self._error = RuntimeError(f"Передача звука в FFmpeg прервана: {exc}")
+        finally:
+            try:
+                self.process.stdin.close()
+            except OSError:
+                pass
+
+    def _read_progress(self):
+        for line in self.process.stdout:
+            key, _, value = line.decode("utf-8", "replace").strip().partition("=")
+            if key == "frame" and value.strip().isdigit() and int(value) > self._frame_count:
+                self._frame_count = int(value)
+                self._last_frame = time.monotonic()
+                self._ready.set()
+
+    def _read_log(self):
+        for line in self.process.stderr:
+            self._log.append(line.decode("utf-8", "replace").strip())
+
+    def start(self, cancel_event: threading.Event | None = None):
+        from proctap import ProcessAudioCapture
+        check_target(self.target)
+        try:
+            self._start_video(cancel_event)
+            self.audio = ProcessAudioCapture(pid=self.target.pid, on_data=self._on_audio)
+            self._video_server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            self._video_server.bind(("127.0.0.1", 0))
+            self._video_server.listen(1)
+            self._video_server.settimeout(.2)
+            video_url = f"tcp://127.0.0.1:{self._video_server.getsockname()[1]}"
+            self.process = subprocess.Popen(recording_command(self.executable, video_url, self.output),
+                                            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+            for function in (self._write_audio, self._write_video, self._read_progress, self._read_log):
+                thread = threading.Thread(target=function, daemon=True, name=f"ffmpeg-{function.__name__}")
+                self._threads.append(thread)
+                thread.start()
+            self.audio.start()
+            self._last_audio = self._last_frame = time.monotonic()
+            deadline = time.monotonic() + 10
+            while not self._ready.wait(.1):
+                if cancel_event is not None and cancel_event.is_set():
+                    raise RecordingCancelled("Запуск записи отменён пользователем.")
+                self.check()
+                if time.monotonic() > deadline:
+                    raise RuntimeError("FFmpeg не подтвердил начало записи видео и звука.")
+            self.check()
+            if not self._audio_bytes:
+                raise RuntimeError("Захват звука процесса не передал данные в FFmpeg.")
+        except Exception:
+            self.stop(validate=False)
+            raise
+
+    def check(self):
+        if self._error:
+            raise self._error
+        if self.process is None or self.process.poll() is not None:
+            raise RuntimeError("FFmpeg завершился во время записи: " + "\n".join(self._log))
+        if self._video_control is not None and self._video_control.is_finished():
+            raise RuntimeError("Захват окна Телемоста остановился.")
+        if self.audio is not None and not self.audio.is_running:
+            raise RuntimeError("Захват звука процесса Телемоста остановился.")
+        if time.monotonic() - self._last_audio > 5:
+            raise RuntimeError("Захват звука Телемоста не передаёт данные более 5 секунд.")
+        if time.monotonic() - self._last_frame > 10:
+            raise RuntimeError("FFmpeg не передаёт кадры видео более 10 секунд.")
+        check_target(self.target)
+
+    def stop(self, *, validate: bool = True) -> str:
+        self._stopping.set()
+        errors = []
+        if self._video_control is not None:
+            try:
+                self._video_control.stop()
+            except Exception as exc:
+                errors.append(f"остановка захвата окна: {exc}")
+            self._video_control = None
+        if self.audio is not None:
+            try:
+                self.audio.close()
+            except Exception as exc:
+                errors.append(f"остановка звука: {exc}")
+            self.audio = None
+        if self.process is not None:
+            try:
+                # EOF on the raw audio pipe + -shortest flushes the MKV cleanly.
+                self.process.wait(timeout=15)
+            except subprocess.TimeoutExpired:
+                self.process.terminate()
+                try:
+                    self.process.wait(timeout=3)
+                except subprocess.TimeoutExpired:
+                    self.process.kill()
+                    self.process.wait(timeout=3)
+                errors.append("FFmpeg не завершился штатно; файл может быть неполным")
+            if validate and self.process.returncode != 0:
+                errors.append("FFmpeg завершился с ошибкой: " + "\n".join(self._log))
+            for thread in self._threads:
+                thread.join(timeout=2)
+            for stream in (self.process.stdin, self.process.stdout, self.process.stderr):
+                if stream is not None and not stream.closed:
+                    stream.close()
+            self.process = None
+        if self._video_server is not None:
+            self._video_server.close()
+            self._video_server = None
+        if validate:
+            if not self.output.is_file() or self.output.stat().st_size == 0:
+                errors.append("файл записи отсутствует или пуст")
+            elif not errors:
+                result = _run_command([self.executable, "-v", "error", "-i", str(self.output),
+                                       "-map", "0:v:0", "-map", "0:a:0", "-t", "0.1", "-f", "null", "-"])
+                if result.returncode:
+                    errors.append("не подтверждены читаемые видео- и аудиодорожки: " + result.stderr[-2000:])
+        if errors:
+            raise RuntimeError("; ".join(errors) + f". Файл: {self.output}")
+        return str(self.output)
