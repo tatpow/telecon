@@ -15,6 +15,12 @@ from urllib.parse import urlsplit, urlunsplit
 
 APP_NAME = "LectureAssistant"
 TELEMOST_HOME_URL = "https://telemost.yandex.ru/"
+ALERT_DEFAULTS = {
+    "alert_sound": True,
+    "alert_notification": True,
+    "alert_badge": True,
+    "alert_volume": 50,
+}
 SETTINGS_DEFAULTS = {
     "ffmpeg_path": "",
     "recordings_dir": "",
@@ -22,17 +28,26 @@ SETTINGS_DEFAULTS = {
     "theme": "dark",
     "auto_start": False,
     "default_lead_minutes": 2,
+    "default_duration_minutes": 90,
     "prevent_sleep": True,
+    **ALERT_DEFAULTS,
 }
 
 
-def validate_telemost_url(url: str) -> str:
-    """Validate the meeting URL before saving or opening it in the local browser."""
+def _normalize_url(url: str) -> str:
     if not isinstance(url, str):
         raise ValueError("Укажите ссылку на встречу в Телемосте.")
     url = url.strip()
     if not url or re.search(r"[\s\\\x00-\x1f\x7f]", url):
-        raise ValueError("Укажите корректную ссылку https://telemost.yandex.ru/j/…")
+        raise ValueError("Укажите корректную ссылку telemost.yandex.ru/j/…")
+    # Only a missing scheme is supplied; explicit HTTP and foreign hosts
+    # must still pass the strict validators below.
+    return url if re.match(r"^[A-Za-z][A-Za-z0-9+.-]*://", url) else "https://" + url
+
+
+def validate_telemost_url(url: str) -> str:
+    """Validate the meeting URL before saving or opening it in the local browser."""
+    url = _normalize_url(url)
     try:
         parsed = urlsplit(url)
         valid = (
@@ -53,6 +68,7 @@ def validate_telemost_url(url: str) -> str:
 
 def validate_profile_url(url: str) -> str:
     """The account setup page may be the homepage; lectures still need /j/ID."""
+    url = _normalize_url(url)
     if isinstance(url, str):
         try:
             parsed = urlsplit(url.strip())
@@ -83,12 +99,18 @@ def _validate_settings(settings: dict) -> dict:
         raise ValueError("Неизвестная настройка.")
     validated = dict(settings)
     for key, value in settings.items():
+        if key in ("alert_sound", "alert_notification", "alert_badge") and type(value) is not bool:
+            raise ValueError("Способы предупреждения должны быть включены или выключены.")
+        if key == "alert_volume" and (type(value) is not int or not 0 <= value <= 100):
+            raise ValueError("Громкость должна быть целым числом от 0 до 100.")
         if key in ("ffmpeg_path", "recordings_dir"):
             if not isinstance(value, str) or len(value) > 4096 or any(ord(c) < 32 for c in value):
                 raise ValueError("Укажите корректный путь к файлу или папке.")
             validated[key] = value.strip()
         if key == "default_lead_minutes" and (type(value) is not int or not 0 <= value <= 120):
             raise ValueError("Опережение должно быть целым числом от 0 до 120 минут.")
+        if key == "default_duration_minutes" and (type(value) is not int or not 1 <= value <= 1440):
+            raise ValueError("Длительность пары должна быть целым числом от 1 до 1440 минут.")
         if key == "auto_start" and type(value) is not bool:
             raise ValueError("Автозапуск должен быть логическим значением.")
         if key == "prevent_sleep" and type(value) is not bool:

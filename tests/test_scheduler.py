@@ -209,6 +209,42 @@ class LectureSchedulerTests(unittest.TestCase):
             with self.subTest(lecture_id=lecture_id), self.assertRaises(ValueError):
                 scheduler.start_now(lecture_id)
 
+    def test_concurrent_quick_joins_create_only_one_lecture(self):
+        started = threading.Event()
+        results = []
+        scheduler = self.scheduler(lambda lecture, cancel: (started.set(), cancel.wait(3)))
+        now = datetime.now()
+        lecture = Lecture(None, "Сейчас", "telemost.yandex.ru/j/quick", now, now + timedelta(minutes=5), lead_minutes=0)
+        threads = [threading.Thread(target=lambda: results.append(scheduler.start_quick(lecture))) for _ in range(8)]
+        try:
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join(2)
+            self.assertTrue(started.wait(2))
+            self.assertEqual(sum(result is not None for result in results), 1)
+            self.assertEqual(len(self.store.list_all()), 2)  # Existing planned + one quick join.
+            self.assertEqual(self.store.get(self.lecture_id).status, "scheduled")
+        finally:
+            scheduler.cancel_active()
+            self.assertTrue(scheduler.wait_idle(3))
+
+    def test_quick_join_failed_claim_does_not_leave_an_automatic_launch(self):
+        scheduler = self.scheduler(lambda lecture, cancel: None)
+        now = datetime.now()
+        lecture = Lecture(None, "Сейчас", "telemost.yandex.ru/j/quick", now, now + timedelta(minutes=5))
+        with patch.object(self.store, "claim", side_effect=RuntimeError("database error")):
+            with self.assertRaisesRegex(RuntimeError, "database error"):
+                scheduler.start_quick(lecture)
+        self.assertEqual([item.id for item in self.store.list_all()], [self.lecture_id])
+
+    def test_expired_quick_join_does_not_persist(self):
+        scheduler = self.scheduler(lambda lecture, cancel: None)
+        now = datetime.now()
+        lecture = Lecture(None, "Сейчас", "telemost.yandex.ru/j/quick", now - timedelta(minutes=5), now - timedelta(minutes=1))
+        self.assertIsNone(scheduler.start_quick(lecture))
+        self.assertEqual([item.id for item in self.store.list_all()], [self.lecture_id])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -148,6 +148,110 @@ class DesktopApiTests(unittest.TestCase):
         self.assertFalse(self.api.delete_lecture(lecture_id)["ok"])
         self.assertEqual(self.store.get(lecture_id).status, "running")
 
+    def test_default_duration_is_exposed_and_survives_bridge_restart(self):
+        from app import DesktopApi
+        self.assertEqual(self.api.get_settings()["data"]["default_duration_minutes"], 90)
+        self.assertTrue(self.api.save_settings({"default_duration_minutes": 120})["ok"])
+        self.assertFalse(self.api.save_settings({"default_duration_minutes": True})["ok"])
+        restored = DesktopApi(self.store, sleep_inhibitor=FakeSleep())
+        self.assertEqual(restored.get_settings()["data"]["default_duration_minutes"], 120)
+
+    def test_alert_preferences_persist_and_bad_types_are_rejected(self):
+        from app import DesktopApi
+        config = {"alert_sound": False, "alert_notification": True, "alert_badge": False, "alert_volume": 17}
+        self.assertTrue(self.api.save_settings(config)["ok"])
+        restored = DesktopApi(self.store, sleep_inhibitor=FakeSleep()).get_settings()["data"]
+        for key, value in config.items():
+            self.assertEqual(restored[key], value)
+        for invalid in ({"alert_sound": "false"}, {"alert_notification": 1}, {"alert_badge": None},
+                        {"alert_volume": True}, {"alert_volume": 101}, {"alert_volume": -1}, {"alert_volume": 12.5}):
+            with self.subTest(invalid=invalid):
+                self.assertFalse(self.api.save_settings(invalid)["ok"])
+
+    def test_visibility_bridge_updates_alerts_and_closing_clears_them(self):
+        from app import DesktopApi
+        from unittest.mock import Mock
+        backend = Mock(audio_error="")
+        api = DesktopApi(self.store, sleep_inhibitor=self.sleep, alert_backend=backend)
+        api._on_visibility(True, Mock())
+        self.assertTrue(api.get_state()["data"]["alerts"]["meeting_hidden"])
+        backend.sound.assert_called_once_with(50)
+        self.assertTrue(api.save_settings({"alert_badge": False})["ok"])
+        backend.badge.assert_called_with(False)
+        self.assertTrue(api._request_close(Mock()))
+        self.assertFalse(api.get_state()["data"]["alerts"]["meeting_hidden"])
+        backend.clear_notification.assert_called_once()
+
+    def test_sound_preview_uses_requested_volume_without_saving(self):
+        from app import DesktopApi
+        from unittest.mock import Mock
+        backend = Mock(audio_error="")
+        api = DesktopApi(self.store, sleep_inhibitor=self.sleep, alert_backend=backend)
+        self.assertTrue(api.preview_alert_sound({"volume": 8})["ok"])
+        backend.sound.assert_called_once_with(8)
+        self.assertEqual(api.get_settings()["data"]["alert_volume"], 50)
+        self.assertFalse(api.preview_alert_sound({"volume": True})["ok"])
+        self.assertFalse(api.preview_alert_sound(None)["ok"])
+
+    def test_restore_meeting_rejects_missing_target_and_uses_exact_target(self):
+        from unittest.mock import Mock, patch
+        self.assertFalse(self.api.restore_meeting()["ok"])
+        target = Mock()
+        self.api._meeting_target = target
+        with patch("recording.restore_target") as restore:
+            self.assertTrue(self.api.restore_meeting()["ok"])
+        restore.assert_called_once_with(target)
+
+    def test_quick_join_creates_and_runs_lecture_with_schedule_paused(self):
+        import threading
+        from app import DesktopApi
+        started = threading.Event()
+        captured = []
+        def runner(lecture, config, *, cancel_event, status_callback):
+            captured.append(lecture)
+            started.set()
+            cancel_event.wait(3)
+        api = DesktopApi(self.store, event_runner=runner, sleep_inhibitor=self.sleep)
+        end = (datetime.now() + timedelta(minutes=20)).replace(microsecond=0)
+        try:
+            result = api.quick_join({"url": "telemost.yandex.ru/j/abc", "ends_at": end.isoformat()})
+            self.assertTrue(result["ok"], result)
+            self.assertTrue(started.wait(2))
+            self.assertFalse(api.get_state()["data"]["scheduler"]["running"])
+            self.assertTrue(self.sleep.active)
+            lecture = captured[0]
+            self.assertEqual(lecture.url, "https://telemost.yandex.ru/j/abc")
+            self.assertEqual(lecture.ends_at, end)
+            self.assertLessEqual(lecture.starts_at, datetime.now())
+            self.assertEqual(lecture.lead_minutes, 0)
+            self.assertEqual(lecture.id, result["data"]["id"])
+            self.assertFalse(api.quick_join({"url": lecture.url, "ends_at": end.isoformat()})["ok"])
+            self.assertEqual(len(self.store.list_all()), 1)
+        finally:
+            api.stop_active()
+            self.assertTrue(api._scheduler.wait_idle(3))
+        self.assertEqual(self.store.get(lecture.id).status, "cancelled")
+        self.assertFalse(self.sleep.active)
+
+    def test_invalid_quick_join_does_not_create_scheduled_lectures(self):
+        future = (datetime.now() + timedelta(hours=1)).isoformat()
+        for payload in (None, {}, {"url": "example.org", "ends_at": future},
+                        {"url": "telemost.yandex.ru/j/1", "ends_at": "2000-01-01T10:00"},
+                        {"url": "telemost.yandex.ru/j/1", "ends_at": future + "+03:00"},
+                        {"url": "telemost.yandex.ru/j/1", "ends_at": True}):
+            with self.subTest(payload=payload):
+                self.assertFalse(self.api.quick_join(payload)["ok"])
+        self.assertEqual(self.store.list_all(), [])
+        self.assertFalse(self.sleep.active)
+
+    def test_quick_join_power_failure_does_not_create_a_lecture(self):
+        from unittest.mock import Mock
+        self.sleep.set_active = Mock(side_effect=RuntimeError("power request failed"))
+        result = self.api.quick_join({"url": "telemost.yandex.ru/j/1",
+                                     "ends_at": (datetime.now() + timedelta(minutes=5)).isoformat()})
+        self.assertFalse(result["ok"])
+        self.assertEqual(self.store.list_all(), [])
+
     def test_manual_join_uses_settings_and_cancel_cleans_up_before_close(self):
         import threading
         from app import DesktopApi

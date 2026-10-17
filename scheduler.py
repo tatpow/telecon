@@ -80,6 +80,24 @@ class LectureScheduler:
             raise ValueError("Укажите корректный номер лекции.")
         return self._start_lecture(lecture_id)
 
+    def start_quick(self, lecture: Lecture) -> Optional[int]:
+        """Create and start one immediate lecture without racing the schedule."""
+        with self._active_lock:
+            if self._active:
+                return None
+            lecture_id = self.store.add(lecture)
+            try:
+                if self._start_lecture(lecture_id):
+                    return lecture_id
+            except Exception:
+                stored = self.store.get(lecture_id)
+                if stored is not None and stored.status == "scheduled":
+                    self.store.delete(lecture_id)
+                raise
+            # A rejected launch must not become an automatic future launch.
+            self.store.delete(lecture_id)
+            return None
+
     def _notify(self, message: str) -> None:
         try:
             self.status_callback(message)

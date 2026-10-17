@@ -1,7 +1,7 @@
 "use strict";
 
 const $ = id => document.getElementById(id);
-const ui = { lectures: [], scheduler: {running:false,active:false,message:"Подключение к приложению…"}, accountLogin:false, filter:"all", query:"", selectedDay:null, month:new Date(), ready:false, refreshing:false, listSignature:"", deleting:null };
+const ui = { alerts:{meeting_hidden:false,error:""}, lectures: [], scheduler: {running:false,active:false,message:"Подключение к приложению…"}, accountLogin:false, filter:"all", query:"", selectedDay:null, month:new Date(), ready:false, refreshing:false, listSignature:"", deleting:null };
 const statuses = { scheduled:"Запланирована", running:"Подключение / запись", done:"Завершена", failed:"Ошибка", missed:"Пропущена", cancelled:"Остановлена" };
 const filterLabels = { all:"Все лекции", upcoming:"Предстоящие", done:"Завершённые" };
 const dayKey = value => { const d = value instanceof Date ? value : new Date(value); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`; };
@@ -52,24 +52,34 @@ function renderLectures() {
   document.querySelectorAll("[data-filter]").forEach(button=>{button.classList.toggle("selected",button.dataset.filter===ui.filter);button.setAttribute("aria-current",button.dataset.filter===ui.filter?"page":"false");});
 }
 function renderStatus() {
+  $("hidden-window-warning").classList.toggle("hidden",!ui.alerts.meeting_hidden||ui.scheduler.closing);showError("alert-error",ui.alerts.error);
   const state=ui.scheduler; $("status-message").textContent=state.message;$("schedule-label").textContent=state.running?"Расписание активно":"Расписание на паузе";$("schedule-dot").classList.toggle("enabled",state.running);$("schedule-hint").textContent=ui.accountLogin?"Войдите в Яндекс в открытом браузере, затем закройте его.":state.running?"Подключимся вовремя. Оставьте приложение открытым.":"Включите, чтобы подключаться к лекциям автоматически.";
   $("schedule-toggle").replaceChildren(icon(state.running?"pause":"play"),el("span","",state.running?"Приостановить расписание":"Включить расписание"));$("schedule-toggle").disabled=ui.accountLogin||state.closing;
   $("live-panel").classList.toggle("hidden",!state.active&&!state.closing&&!ui.accountLogin);$("live-message").textContent=state.message;$("live-panel").querySelector("strong").textContent=ui.accountLogin?"Вход в Яндекс":state.closing?"Закрытие приложения":"Текущая лекция";$("stop-active").classList.toggle("hidden",!state.active||state.closing);
   if($("prepare-account"))$("prepare-account").disabled=ui.accountLogin||state.running||state.active||state.closing;
+  $("quick-connect").disabled=ui.accountLogin||state.active||state.closing;
+  $("start-quick").disabled=ui.accountLogin||state.active||state.closing||ui.quickSubmitting;
 }
 async function refresh() {
   if(ui.refreshing||!ui.ready)return;ui.refreshing=true;
-  try{const state=await call("get_state");const signature=JSON.stringify([state.lectures,state.scheduler.active,state.scheduler.closing,state.account_login,Math.floor(Date.now()/60000)]);ui.lectures=state.lectures;ui.scheduler=state.scheduler;ui.accountLogin=Boolean(state.account_login);if(signature!==ui.listSignature){ui.listSignature=signature;renderCalendar();renderLectures();}renderStatus();showError("connection-error","");}catch(error){showError("connection-error",error.message);}finally{ui.refreshing=false;}
+  try{const state=await call("get_state");const signature=JSON.stringify([state.lectures,state.scheduler.active,state.scheduler.closing,state.account_login,Math.floor(Date.now()/60000)]);ui.lectures=state.lectures;ui.scheduler=state.scheduler;ui.alerts=state.alerts||{meeting_hidden:false,error:""};ui.accountLogin=Boolean(state.account_login);if(signature!==ui.listSignature){ui.listSignature=signature;renderCalendar();renderLectures();}renderStatus();showError("connection-error","");}catch(error){showError("connection-error",error.message);}finally{ui.refreshing=false;}
 }
 function resetFilters(){ui.filter="all";ui.query="";ui.selectedDay=null;$("search").value="";renderCalendar();renderLectures();}
-function openLecture(lecture=null) {
+async function openLecture(lecture=null) {
+  let settings;try{settings=await call("get_settings");}catch(error){toast(error.message,true);return;}
   const form=$("lecture-form");form.reset();showError("lecture-error","");field(form,"id").value=lecture?.id||"";field(form,"title").value=lecture?.title||"";field(form,"url").value=lecture?.url||"";
   let start=new Date();start.setMinutes(start.getMinutes()+5,0,0);if(ui.selectedDay&&ui.selectedDay>dayKey(new Date()))start=new Date(`${ui.selectedDay}T09:00:00`);
-  const end=new Date(start.getTime()+90*60000);field(form,"starts_at").value=lecture?lecture.starts_at.slice(0,16):localInput(start);field(form,"ends_at").value=lecture?lecture.ends_at.slice(0,16):localInput(end);field(form,"lead_minutes").value=lecture?.lead_minutes??2;
+  const end=new Date(start.getTime()+settings.default_duration_minutes*60000);field(form,"starts_at").value=lecture?lecture.starts_at.slice(0,16):localInput(start);field(form,"ends_at").value=lecture?lecture.ends_at.slice(0,16):localInput(end);field(form,"lead_minutes").value=lecture?.lead_minutes??2;
+  form.dataset.durationMinutes=String(settings.default_duration_minutes);form.dataset.autoEnd=lecture?"":localInput(end);
   $("lecture-dialog-title").textContent=lecture?"Редактировать лекцию":"Новая лекция";$("save-lecture").textContent=lecture?"Сохранить изменения":"Добавить лекцию";$("lecture-dialog").showModal();setTimeout(()=>field(form,"title").focus(),30);
 }
-function settingsPayload(){const form=$("settings-form");return {recordings_dir:field(form,"recordings_dir").value.trim(),ffmpeg_path:field(form,"ffmpeg_path").value.trim(),prevent_sleep:field(form,"prevent_sleep").checked};}
-async function openSettings(){showError("settings-error","");$("recording-result").classList.add("hidden");try{const settings=await call("get_settings");const form=$("settings-form");form.reset();field(form,"recordings_dir").value=settings.recordings_dir;field(form,"ffmpeg_path").value=settings.ffmpeg_path;field(form,"prevent_sleep").checked=settings.prevent_sleep;$("settings-dialog").showModal();renderStatus();}catch(error){toast(error.message,true);}}
+function settingsPayload(){const form=$("settings-form");return {recordings_dir:field(form,"recordings_dir").value.trim(),ffmpeg_path:field(form,"ffmpeg_path").value.trim(),prevent_sleep:field(form,"prevent_sleep").checked,default_duration_minutes:Number(field(form,"default_duration_minutes").value),alert_sound:field(form,"alert_sound").checked,alert_notification:field(form,"alert_notification").checked,alert_badge:field(form,"alert_badge").checked,alert_volume:Number(field(form,"alert_volume").value)};}
+async function openSettings(){showError("settings-error","");$("recording-result").classList.add("hidden");try{const settings=await call("get_settings");const form=$("settings-form");form.reset();field(form,"recordings_dir").value=settings.recordings_dir;field(form,"ffmpeg_path").value=settings.ffmpeg_path;field(form,"prevent_sleep").checked=settings.prevent_sleep;field(form,"default_duration_minutes").value=settings.default_duration_minutes;for(const key of ["alert_sound","alert_notification","alert_badge"])field(form,key).checked=settings[key];field(form,"alert_volume").value=settings.alert_volume;renderAlertControls();$("settings-dialog").showModal();renderStatus();}catch(error){toast(error.message,true);}}
+
+async function openQuick(){try{const settings=await call("get_settings");const form=$("quick-form");form.reset();showError("quick-error","");field(form,"ends_at").value=localInput(new Date(Date.now()+settings.default_duration_minutes*60000));$("quick-dialog").showModal();renderStatus();field(form,"url").focus();}catch(error){toast(error.message,true);}}
+$("quick-connect").addEventListener("click",openQuick);
+$("quick-form").addEventListener("submit",async event=>{event.preventDefault();if(ui.quickSubmitting)return;ui.quickSubmitting=true;renderStatus();showError("quick-error","");try{const form=event.currentTarget;await call("quick_join",{url:field(form,"url").value,ends_at:field(form,"ends_at").value});$("quick-dialog").close();resetFilters();toast("Подключаемся к встрече…");await refresh();}catch(error){showError("quick-error",error.message);}finally{ui.quickSubmitting=false;renderStatus();}});
+field($("lecture-form"),"starts_at").addEventListener("input",()=>{const form=$("lecture-form");const end=field(form,"ends_at");const start=new Date(field(form,"starts_at").value);if(!field(form,"id").value&&end.value===form.dataset.autoEnd&&!Number.isNaN(start.getTime())){end.value=localInput(new Date(start.getTime()+Number(form.dataset.durationMinutes)*60000));form.dataset.autoEnd=end.value;}});
 
 $("sidebar-create").addEventListener("click",()=>openLecture());$("composer-create").addEventListener("click",()=>openLecture());$("open-settings").addEventListener("click",openSettings);
 document.querySelectorAll("[data-close]").forEach(button=>button.addEventListener("click",()=>$(button.dataset.close).close()));
@@ -81,7 +91,7 @@ $("prev-month").addEventListener("click",()=>{ui.month=new Date(ui.month.getFull
 $("schedule-toggle").addEventListener("click",event=>action(event.currentTarget,async()=>{await call("set_scheduler",{enabled:!ui.scheduler.running});await refresh();}));
 $("stop-active").addEventListener("click",event=>action(event.currentTarget,async()=>{await call("stop_active");await refresh();}));
 $("lecture-form").addEventListener("submit",async event=>{event.preventDefault();const form=event.currentTarget;const button=$("save-lecture");button.disabled=true;showError("lecture-error","");try{const payload={title:field(form,"title").value,url:field(form,"url").value,starts_at:field(form,"starts_at").value,ends_at:field(form,"ends_at").value,lead_minutes:Number(field(form,"lead_minutes").value)};if(field(form,"id").value)payload.id=Number(field(form,"id").value);await call("save_lecture",payload);$("lecture-dialog").close();toast(payload.id?"Изменения сохранены":"Лекция добавлена в расписание");await refresh();}catch(error){showError("lecture-error",error.message);}finally{button.disabled=false;}});
-$("settings-form").addEventListener("submit",async event=>{event.preventDefault();const button=event.submitter;button.disabled=true;showError("settings-error","");try{await call("save_settings",settingsPayload());$("settings-dialog").close();toast("Настройки записи сохранены");}catch(error){showError("settings-error",error.message);}finally{button.disabled=false;}});
+$("settings-form").addEventListener("submit",async event=>{event.preventDefault();const button=event.submitter;button.disabled=true;showError("settings-error","");try{await call("save_settings",settingsPayload());$("settings-dialog").close();toast("Настройки сохранены");}catch(error){showError("settings-error",error.message);}finally{button.disabled=false;}});
 $("check-recording").addEventListener("click",async event=>{const button=event.currentTarget;button.disabled=true;$("recording-result").textContent="Проверяем FFmpeg и захват звука процесса…";$("recording-result").classList.remove("hidden","error");showError("settings-error","");try{await call("save_settings",settingsPayload());const result=await call("check_recording");$("recording-result").textContent=`${result.version}\n${result.capture}\nПапка: ${result.recordings_dir}\nКомпоненты доступны. Захват проверяется при подключении к лекции.`;}catch(error){$("recording-result").textContent=error.message;$("recording-result").classList.add("error");}finally{button.disabled=false;}});
 
 $("delete-form").addEventListener("submit",event=>{event.preventDefault();action(event.submitter,async()=>{await call("delete_lecture",ui.deleting);$("delete-dialog").close();ui.deleting=null;toast("Лекция удалена");await refresh();});});
@@ -93,3 +103,9 @@ $("today-date").textContent=new Date().toLocaleDateString("ru-RU",{weekday:"shor
 renderCalendar();renderLectures();if(window.pywebview?.api)connect();else setTimeout(()=>{if(!ui.ready)$("status-message").textContent="Откройте Телекон через app.py для работы с расписанием";},2500);
 
 $("prepare-account").addEventListener("click",event=>action(event.currentTarget,async()=>{const url=field($("settings-form"),"account_url").value;await call("prepare_account",{url});$("settings-dialog").close();toast("Войдите в Яндекс в открытом браузере, затем закройте его");await refresh();}));
+
+function renderAlertControls(){const form=$("settings-form");const volume=field(form,"alert_volume");$("alert-volume-label").textContent=`${volume.value}%`;volume.disabled=!field(form,"alert_sound").checked;$("preview-alert-sound").disabled=!field(form,"alert_sound").checked||Number(volume.value)===0;}
+field($("settings-form"),"alert_volume").addEventListener("input",renderAlertControls);
+field($("settings-form"),"alert_sound").addEventListener("change",renderAlertControls);
+$("preview-alert-sound").addEventListener("click",event=>action(event.currentTarget,async()=>{await call("preview_alert_sound",{volume:Number(field($("settings-form"),"alert_volume").value)});}));
+$("restore-meeting").addEventListener("click",event=>action(event.currentTarget,async()=>{await call("restore_meeting");await refresh();}));

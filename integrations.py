@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import logging
 import sys
 import threading
 import time
@@ -15,7 +16,7 @@ from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 from playwright.sync_api import sync_playwright
 
 from storage import Lecture, TELEMOST_HOME_URL, user_data_dir, validate_telemost_url, validate_profile_url
-from recording import FFmpegRecorder, browser_target, check_recorder
+from recording import FFmpegRecorder, browser_target, check_recorder, target_minimized
 
 
 # Checked in the user-provided Telemost meeting on 2026-10-16. The outer
@@ -69,7 +70,9 @@ def _launch_browser_context(playwright, profile: Path):
         user_data_dir=str(profile),
         headless=False,
         no_viewport=True,
-        args=["--no-first-run", "--no-default-browser-check", "--start-maximized"],
+        args=["--no-first-run", "--no-default-browser-check", "--start-maximized",
+              "--disable-background-timer-throttling", "--disable-backgrounding-occluded-windows",
+              "--disable-renderer-backgrounding"],
     )
 
 
@@ -116,6 +119,15 @@ def _wait(cancel_event: threading.Event | None, seconds: float) -> None:
 def _report(callback: StatusCallback | None, message: str) -> None:
     if callback is not None:
         callback(message)
+
+
+def _report_visibility(callback, hidden, target=None):
+    if callback is not None:
+        try:
+            callback(hidden, target)
+        except Exception:
+            # An optional alert must never prevent saving or closing the recorder.
+            logging.getLogger(__name__).exception("Meeting visibility callback failed")
 
 
 def _first_visible(scope, selectors: tuple[str, ...]):
@@ -411,7 +423,8 @@ def prepare_browser_profile(
 
 def run_lecture(lecture: Lecture, settings: dict | None = None, *,
                 cancel_event: threading.Event | None = None,
-                status_callback: StatusCallback | None = None) -> str:
+                status_callback: StatusCallback | None = None,
+                visibility_callback: Callable | None = None) -> str:
     """Record only the configured meeting browser window and its process audio."""
     _check_cancel(cancel_event)
     validate_telemost_url(lecture.url)
@@ -442,12 +455,15 @@ def run_lecture(lecture: Lecture, settings: dict | None = None, *,
                 if page.is_closed() or _first_visible(meeting, JOINED_SELECTORS) is None:
                     raise RuntimeError("Соединение с Телемостом прервано; запись остановлена.")
                 recorder.check()
+                if visibility_callback is not None:
+                    _report_visibility(visibility_callback, target_minimized(target), target)
                 remaining = (lecture.ends_at - datetime.now(tz=lecture.ends_at.tzinfo)).total_seconds()
                 _wait(cancel_event, min(.5, max(0, remaining)))
             _check_cancel(cancel_event)
         except Exception as exc:
             error = exc
         finally:
+            _report_visibility(visibility_callback, False)
             if recorder is not None:
                 try:
                     output = recorder.stop(validate=recording_started)

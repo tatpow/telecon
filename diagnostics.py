@@ -9,6 +9,9 @@ import subprocess
 import tempfile
 import threading
 import traceback
+import ctypes
+from ctypes import wintypes
+from datetime import datetime, timedelta
 from pathlib import Path
 
 
@@ -21,7 +24,7 @@ def run_self_check(report_path: Path) -> int:
         from app import DesktopApi
         from integrations import _start_playwright, _mute_devices_stably
         from power import SleepInhibitor
-        from recording import FFmpegRecorder, browser_target, check_recorder
+        from recording import FFmpegRecorder, browser_target, check_recorder, target_minimized
         from storage import LectureStore
 
         with tempfile.TemporaryDirectory(prefix="telecon-build-check-", ignore_cleanup_errors=True) as temporary:
@@ -66,8 +69,20 @@ def run_self_check(report_path: Path) -> int:
                     o.frequency.value=440;g.gain.value=.02;o.connect(g).connect(a.destination);o.start();</script>""")
                 page.wait_for_timeout(500)
                 report["checks"]["bundled_chromium_launch"] = True
-                recorder = FFmpegRecorder(browser_target(directory / "profile"), config, 0)
+                target = browser_target(directory / "profile")
+                recorder = FFmpegRecorder(target, config, 0)
                 recorder.start()
+                for _ in range(6):
+                    page.wait_for_timeout(500)
+                    recorder.check()
+                user = ctypes.WinDLL("user32", use_last_error=True)
+                user.ShowWindow.argtypes = [wintypes.HWND, ctypes.c_int]
+                user.ShowWindow(target.hwnd, 6)  # SW_MINIMIZE, only our test window.
+                assert target_minimized(target), "Synthetic browser did not minimize"
+                for _ in range(8):
+                    page.wait_for_timeout(500)
+                    recorder.check()
+                user.ShowWindow(target.hwnd, 9)  # SW_RESTORE.
                 for _ in range(6):
                     page.wait_for_timeout(500)
                     recorder.check()
@@ -88,6 +103,22 @@ def run_self_check(report_path: Path) -> int:
                 assert len(pixel) == 3 and sum(pixel) > 30 and pixel[2] > pixel[0]*1.5, "Recorded picture is missing or incorrect"
                 report["media"] = {"bytes": Path(output).stat().st_size, "audio_rms": rms, "mean_rgb": list(pixel)}
                 report["checks"]["window_video_and_process_audio"] = True
+                pixels = subprocess.run(
+                    [executable, "-v", "error", "-i", output, "-an", "-vf", "fps=2,scale=1:1",
+                     "-pix_fmt", "rgb24", "-f", "rawvideo", "pipe:1"],
+                    capture_output=True, check=True, timeout=20, creationflags=subprocess.CREATE_NO_WINDOW,
+                ).stdout
+                colors = [pixels[index:index+3] for index in range(0, len(pixels), 3)]
+                black = [index for index, color in enumerate(colors) if sum(color) < 9]
+                assert black, "Minimized video did not become black"
+                assert any(sum(color) > 30 for color in colors[:min(black)]), "Initial picture missing"
+                assert any(sum(color) > 30 for color in colors[max(black)+1:]), "Picture did not resume"
+                offset = int(black[len(black)//2] / 2 * 8000)
+                segment = samples[offset:offset+4000]
+                minimized_rms = math.sqrt(sum(sample*sample for sample in segment)/len(segment))
+                assert minimized_rms > .001, "Process audio stopped while minimized"
+                report["media"]["minimized_audio_rms"] = minimized_rms
+                report["checks"]["minimized_recording_and_restore"] = True
             finally:
                 try:
                     if recorder is not None:
@@ -101,6 +132,12 @@ def run_self_check(report_path: Path) -> int:
 
             import webview
             called = threading.Event()
+            minimized = threading.Event()
+            worker_started = threading.Event()
+
+            def synthetic_runner(lecture, settings, *, cancel_event, status_callback):
+                worker_started.set()
+                cancel_event.wait(10)
 
             class DiagnosticApi(DesktopApi):
                 def get_state(self):
@@ -109,14 +146,45 @@ def run_self_check(report_path: Path) -> int:
                         called.set()
                     return result
 
-            api = DiagnosticApi(LectureStore(directory / "lectures.sqlite3"))
+            api = DiagnosticApi(LectureStore(directory / "lectures.sqlite3"), event_runner=synthetic_runner)
             ui = Path(__file__).resolve().parent / "ui" / "index.html"
             assert ui.is_file(), "Packaged UI files are missing"
             window = webview.create_window("Телекон — проверка билда", str(ui), js_api=api,
                                            width=1000, height=760, background_color="#171819")
+            api._alerts.backend.window = window
+            window.events.minimized += lambda: minimized.set()
             def wait_for_bridge():
-                report["checks"]["native_ui_js_bridge"] = called.wait(20)
-                window.destroy()
+                try:
+                    report["checks"]["native_ui_js_bridge"] = called.wait(20)
+                    window.minimize()
+                    assert minimized.wait(5), "Native app did not minimize"
+                    result = api.quick_join({"url": "telemost.yandex.ru/j/synthetic-check",
+                                             "ends_at": (datetime.now() + timedelta(minutes=1)).isoformat()})
+                    assert result["ok"], result
+                    assert worker_started.wait(5), "Background worker did not start while minimized"
+                    api.save_settings({"alert_volume": 0})
+                    api._on_visibility(True)
+                    alert_state = api.get_state()["data"]["alerts"]
+                    assert alert_state["meeting_hidden"] and not alert_state["error"], alert_state
+                    assert api._alerts.backend._tray_hwnd is not None, "Native notification icon missing"
+                    api._on_visibility(False)
+                    assert api._alerts.backend._tray_hwnd is None, "Native notification was not cleared"
+                    assert not api.get_state()["data"]["alerts"]["error"]
+                    report["checks"]["native_hidden_window_alerts"] = True
+                    # UI timers may be suspended; the Python worker must remain active.
+                    threading.Event().wait(1)
+                    assert api._scheduler.active, "Background worker stopped while minimized"
+                    report["checks"]["native_minimized_worker"] = True
+                except Exception:
+                    report["checks"]["native_minimized_worker"] = False
+                    report["native_ui_error"] = traceback.format_exc()
+                finally:
+                    api._alerts.close()
+                    api.stop_active()
+                    if api._scheduler:
+                        api._scheduler.wait_idle(10)
+                    api._sleep.close()
+                    window.destroy()
             webview.start(wait_for_bridge, http_server=True, private_mode=True)
             assert report["checks"]["native_ui_js_bridge"], "UI did not call the Python bridge"
             report["ok"] = all(report["checks"].values())

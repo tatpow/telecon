@@ -6,7 +6,7 @@ from contextlib import closing
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from storage import Lecture, LectureStore, validate_telemost_url
+from storage import Lecture, LectureStore, validate_telemost_url, validate_profile_url
 
 
 class LectureStoreTests(unittest.TestCase):
@@ -96,6 +96,37 @@ class LectureStoreTests(unittest.TestCase):
         for lead in (True, False, 1.5, "2", -1, 121):
             with self.subTest(lead=lead), self.assertRaises(ValueError):
                 self.add_lecture(timedelta(hours=1), lead_minutes=lead)
+
+    def test_schemeless_meeting_urls_are_normalized_when_saved_and_edited(self):
+        raw = " TELEMOST.YANDEX.RU:443/j/abc_12-3/?key=value#section "
+        expected = "https://telemost.yandex.ru/j/abc_12-3?key=value#section"
+        self.assertEqual(validate_telemost_url(raw), expected)
+        self.assertEqual(validate_telemost_url("telemost.yandex.ru/j/123?next=https://example.org"),
+                         "https://telemost.yandex.ru/j/123?next=https://example.org")
+        lecture_id = self.add_lecture(timedelta(hours=1), url=raw)
+        self.assertEqual(self.store.get(lecture_id).url, expected)
+        old = self.store.get(lecture_id)
+        self.assertTrue(self.store.update(Lecture(old.id, old.title, "telemost.yandex.ru/j/changed",
+                                                  old.starts_at, old.ends_at)))
+        self.assertEqual(self.store.get(lecture_id).url, "https://telemost.yandex.ru/j/changed")
+
+    def test_schemeless_urls_keep_strict_meeting_and_profile_validation(self):
+        self.assertEqual(validate_profile_url(" telemost.yandex.ru "), "https://telemost.yandex.ru/")
+        self.assertEqual(validate_profile_url("telemost.yandex.ru/j/123"), "https://telemost.yandex.ru/j/123")
+        for url in ("telemost.yandex.ru", "//telemost.yandex.ru/j/1", "telemost.yandex.ru.evil.test/j/1",
+                    "evil@telemost.yandex.ru/j/1", "telemost.yandex.ru:444/j/1", "telemost.yandex.ru/j/1 two",
+                    "telemost.yandex.ru\\j\\1", "http://telemost.yandex.ru/j/1", "javascript:alert(1)"):
+            with self.subTest(url=url), self.assertRaises(ValueError):
+                validate_telemost_url(url)
+
+    def test_default_duration_persists_and_invalid_values_do_not_replace_it(self):
+        self.assertEqual(self.store.get_settings()["default_duration_minutes"], 90)
+        self.store.save_settings({"default_duration_minutes": 105})
+        self.assertEqual(LectureStore(self.store.db_path).get_settings()["default_duration_minutes"], 105)
+        for value in (True, False, "90", 90.5, 0, -1, 1441, None):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                self.store.save_settings({"default_duration_minutes": value})
+        self.assertEqual(self.store.get_settings()["default_duration_minutes"], 105)
 
     def test_lectures_are_returned_in_chronological_order(self):
         later = self.add_lecture(timedelta(hours=2))

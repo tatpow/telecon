@@ -75,6 +75,21 @@ class LectureRecordingTests(unittest.TestCase):
         self.now=self.lecture.ends_at
         with self.assertRaisesRegex(RuntimeError,'уже прошло'):integrations.run_lecture(self.lecture)
         self.preflight.assert_not_called()
+    def test_visibility_changes_are_reported_and_finally_cleared(self):
+        callback = Mock()
+        with patch.object(integrations, 'target_minimized', side_effect=[False, True, True, False]):
+            integrations.run_lecture(self.lecture, visibility_callback=callback)
+        self.assertEqual([call.args[0] for call in callback.call_args_list], [False, True, True, False, False])
+        self.assertEqual(callback.call_args.args, (False, None))
+        self.cleaned()
+
+    def test_broken_alert_callback_does_not_skip_saving_and_cleanup(self):
+        callback = Mock(side_effect=RuntimeError('alert unavailable'))
+        with patch.object(integrations, 'target_minimized', return_value=True), \
+                self.assertLogs('integrations', level='ERROR'):
+            integrations.run_lecture(self.lecture, visibility_callback=callback)
+        self.recorder.stop.assert_called_once_with(validate=True)
+        self.cleaned()
     def test_browser_cleanup_error_never_skips_playwright_cleanup(self):
         self.context.close.side_effect=RuntimeError('close failed')
         with self.assertRaisesRegex(RuntimeError,'close failed'):integrations.run_lecture(self.lecture)
@@ -104,6 +119,37 @@ class RecorderTests(unittest.TestCase):
         self.recorder.process=Mock();self.recorder.process.poll.return_value=None
         self.recorder.audio=Mock(is_running=False)
         with self.assertRaisesRegex(RuntimeError,'звука'):self.recorder.check()
+    def test_minimized_video_is_black_and_restores_only_fresh_frames(self):
+        self.recorder._video_frame = b'old slide'
+        with patch.object(recording, 'target_minimized', return_value=True):
+            frame = self.recorder._output_frame()
+        self.assertEqual(len(frame), 1920 * 1080 * 4)
+        self.assertFalse(any(frame))
+        with patch.object(recording, 'target_minimized', return_value=False):
+            self.assertEqual(self.recorder._output_frame(), frame)
+            self.recorder._video_frame = b'fresh slide'
+            self.assertEqual(self.recorder._output_frame(), b'fresh slide')
+
+    def test_recording_can_start_when_minimized_without_wgc_frames(self):
+        capture = Mock()
+        capture.start_free_threaded.return_value.is_finished.return_value = False
+        self.recorder._first_frame = Mock()
+        self.recorder._first_frame.wait.return_value = False
+        with patch('windows_capture.WindowsCapture', return_value=capture), \
+                patch.object(recording, 'target_minimized', return_value=True):
+            self.recorder._start_video(None)
+        capture.start_free_threaded.assert_called_once()
+        self.assertIsNone(self.recorder._error)
+
+    def test_minimized_start_still_detects_real_capture_failure(self):
+        capture = Mock()
+        capture.start_free_threaded.return_value.is_finished.return_value = True
+        self.recorder._first_frame = Mock()
+        self.recorder._first_frame.wait.return_value = False
+        with patch('windows_capture.WindowsCapture', return_value=capture), \
+                patch.object(recording, 'target_minimized', return_value=True):
+            with self.assertRaisesRegex(RuntimeError, 'не передал изображение'):
+                self.recorder._start_video(None)
     def test_same_frame_progress_does_not_hide_stalled_encoder(self):
         self.recorder.process=Mock()
         self.recorder.process.stdout=[b'frame=1\n',b'frame=1\n',b'frame=1\n']
@@ -135,5 +181,57 @@ class RecorderTests(unittest.TestCase):
         process.stdin.closed=process.stdout.closed=process.stderr.closed=True
         with self.assertRaisesRegex(RuntimeError,'не завершился штатно'):self.recorder.stop()
         process.terminate.assert_called_once()
+
+class WindowTargetTests(unittest.TestCase):
+    def setUp(self):
+        self.target = recording.BrowserTarget(7, 12345)
+        self.user = Mock()
+        self.user.IsWindow.return_value = True
+        self.user.IsWindowVisible.return_value = True
+        self.user.IsIconic.return_value = True
+        self.user.OpenInputDesktop.return_value = 456
+        self.user.GetWindowThreadProcessId.side_effect = lambda hwnd, owner: setattr(owner._obj, 'value', 7)
+        def desktop_name(handle, index, buffer, size, required):
+            buffer.value = 'Default'
+            return True
+        self.user.GetUserObjectInformationW.side_effect = desktop_name
+        patcher = patch.object(recording.ctypes, 'WinDLL', return_value=self.user)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_minimized_window_remains_valid(self):
+        recording.check_target(self.target)
+        self.assertTrue(recording.target_minimized(self.target))
+        self.user.CloseDesktop.assert_called_once_with(456)
+
+    def test_closed_window_and_changed_owner_still_fail(self):
+        self.user.IsWindow.return_value = False
+        with self.assertRaisesRegex(RuntimeError, 'закрыто'):
+            recording.check_target(self.target)
+        self.user.IsWindow.return_value = True
+        self.user.GetWindowThreadProcessId.side_effect = lambda hwnd, owner: setattr(owner._obj, 'value', 8)
+        with self.assertRaisesRegex(RuntimeError, 'не принадлежит'):
+            recording.check_target(self.target)
+
+    def test_restore_requires_verified_target_and_never_restores_another_process(self):
+        self.user.IsIconic.return_value = False
+        recording.restore_target(self.target)
+        self.user.ShowWindow.assert_called_once_with(12345, 9)
+        self.user.SetForegroundWindow.assert_called_once_with(12345)
+        self.user.ShowWindow.reset_mock()
+        self.user.GetWindowThreadProcessId.side_effect = lambda hwnd, owner: setattr(owner._obj, 'value', 8)
+        with self.assertRaisesRegex(RuntimeError, 'не принадлежит'):
+            recording.restore_target(self.target)
+        self.user.ShowWindow.assert_not_called()
+
+    def test_locked_desktop_still_fails_and_releases_handle(self):
+        def locked_name(handle, index, buffer, size, required):
+            buffer.value = 'Winlogon'
+            return True
+        self.user.GetUserObjectInformationW.side_effect = locked_name
+        with self.assertRaisesRegex(RuntimeError, 'заблокирована'):
+            recording.check_target(self.target)
+        self.user.CloseDesktop.assert_called_once_with(456)
+
 
 if __name__=='__main__':unittest.main()

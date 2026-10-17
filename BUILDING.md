@@ -23,7 +23,7 @@ py -3.12 -m venv build\builder-venv
 .\build\builder-venv\Scripts\python.exe -m pip install -r requirements-build.lock.txt
 .\build\builder-venv\Scripts\python.exe -m playwright install chromium
 .\build\builder-venv\Scripts\python.exe -m unittest discover -s tests -v
-.\build\builder-venv\Scripts\python.exe build_windows.py --version 2026.10.16.3
+.\build\builder-venv\Scripts\python.exe build_windows.py --version v0.2.0b --no-hashsum
 ```
 
 Нужны установленный Microsoft Visual C++ x64 Redistributable и Edge WebView2.
@@ -38,15 +38,20 @@ Windows lock-файл содержит Windows wheels и не применяет
 
 Готовый EXE сначала проверяется на временных данных: закрытие ошибки камеры,
 выключение устройств в тестовом интерфейсе, запуск Chromium, настоящая запись
-синтетического видео/звука через FFmpeg, native-окно и Python bridge, освобождение
-power request. Корпоративная сессия и настоящие лекции не используются.
+синтетического видео/звука через FFmpeg, чёрное видео с продолжающимся звуком
+при сворачивании и возврат картинки, native-окно и Python bridge, запуск фонового
+обработчика в свёрнутом Телеконе, показ и снятие уведомления Windows и значка
+на панели задач, освобождение power request. Звук в самопроверке выключен. Корпоративная сессия и настоящие лекции не используются.
 
-Результаты — `dist/Telecon-Windows-x64-<версия>/Telecon.exe`, ZIP всей папки и
-`.zip.sha256`. В релизе находятся `SELF-CHECK.json`, `BUILD-INFO.json` и
+Результаты — `dist/Telecon-Windows-x64-v0.2.0b/Telecon.exe` и ZIP всей папки.
+Флаг `--no-hashsum` исключает файл `.zip.sha256` и хеши исходников из отчёта.
+Без этого флага контрольные суммы создаются, как в предыдущих сборках.
+Метка релиза `v0.2.0b` записывается в свойства EXE; числовая версия Windows —
+`0.2.0.0`. Поддерживаются также прежние версии вида `2026.10.17.1`. В релизе находятся `SELF-CHECK.json`, `BUILD-INFO.json` и
 `START-HERE.txt`. Распаковывайте всю папку, не копируйте один EXE.
 
 ```powershell
-.\dist\Telecon-Windows-x64-2026.10.16.3\Telecon.exe --self-check "$env:TEMP\telecon-self-check.json"
+.\dist\Telecon-Windows-x64-v0.2.0b\Telecon.exe --self-check "$env:TEMP\telecon-self-check.json"
 ```
 
 `--skip-compile` предназначен только для повторной упаковки неизменённого

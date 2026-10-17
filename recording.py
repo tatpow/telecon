@@ -130,10 +130,10 @@ def browser_target(profile: Path) -> BrowserTarget:
 
 def check_target(target: BrowserTarget) -> None:
     user = ctypes.WinDLL("user32", use_last_error=True)
-    for name in ("IsWindow", "IsWindowVisible", "IsIconic"):
+    for name in ("IsWindow", "IsWindowVisible"):
         getattr(user, name).argtypes = [wintypes.HWND]
-    if not user.IsWindow(target.hwnd) or not user.IsWindowVisible(target.hwnd) or user.IsIconic(target.hwnd):
-        raise RuntimeError("Окно Телемоста закрыто или свёрнуто; запись прервана.")
+    if not user.IsWindow(target.hwnd) or not user.IsWindowVisible(target.hwnd):
+        raise RuntimeError("Окно Телемоста закрыто; запись прервана.")
     owner = wintypes.DWORD()
     user.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
     user.GetWindowThreadProcessId(target.hwnd, ctypes.byref(owner))
@@ -155,6 +155,24 @@ def check_target(target: BrowserTarget) -> None:
             raise RuntimeError("Windows заблокирована или открыт защищённый рабочий стол; запись прервана.")
     finally:
         user.CloseDesktop(desktop)
+
+
+def target_minimized(target: BrowserTarget) -> bool:
+    user = ctypes.WinDLL("user32", use_last_error=True)
+    user.IsIconic.argtypes = [wintypes.HWND]
+    return bool(user.IsIconic(target.hwnd))
+
+
+def restore_target(target: BrowserTarget) -> None:
+    """Restore only the verified dedicated browser window at the user's request."""
+    check_target(target)
+    user = ctypes.WinDLL("user32", use_last_error=True)
+    user.ShowWindow.argtypes = [wintypes.HWND, ctypes.c_int]
+    user.SetForegroundWindow.argtypes = [wintypes.HWND]
+    user.ShowWindow(target.hwnd, 9)  # SW_RESTORE.
+    user.SetForegroundWindow(target.hwnd)
+    if target_minimized(target):
+        raise RuntimeError("Windows не восстановила окно Телемоста. Откройте его на панели задач.")
 
 
 def recording_command(executable: str, video_url: str, output: Path) -> list[str]:
@@ -184,6 +202,7 @@ class FFmpegRecorder:
         self._video_server = None
         self._video_connection = None
         self._video_frame = None
+        self._black_frame = bytes(1920 * 1080 * 4)
         self._first_frame = threading.Event()
         self._queue = queue.Queue(maxsize=1024)
         self._stopping = threading.Event()
@@ -231,8 +250,20 @@ class FFmpegRecorder:
                 raise RecordingCancelled("Запуск записи отменён пользователем.")
             if self._error:
                 raise self._error
+            if target_minimized(self.target) and not self._video_control.is_finished():
+                # WGC may suspend frames while minimized, including at startup.
+                # The video writer supplies black; process audio stays live.
+                break
             if time.monotonic()>deadline or self._video_control.is_finished():
                 raise RuntimeError("Windows Graphics Capture не передал изображение окна Телемоста.")
+
+    def _output_frame(self):
+        if target_minimized(self.target):
+            # Do not reuse the last slide when the window is restored before
+            # WGC has delivered its first fresh frame.
+            self._video_frame = None
+            return self._black_frame
+        return self._video_frame or self._black_frame
 
     def _write_video(self):
         try:
@@ -248,9 +279,7 @@ class FFmpegRecorder:
             connection.settimeout(3)
             deadline = time.monotonic()
             while not self._stopping.is_set():
-                frame = self._video_frame
-                if frame is not None:
-                    connection.sendall(frame)
+                connection.sendall(self._output_frame())
                 deadline += 1/15
                 self._stopping.wait(max(0, deadline-time.monotonic()))
         except OSError as exc:

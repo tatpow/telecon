@@ -5,8 +5,9 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Callable
 
-from storage import Lecture, LectureStore, TELEMOST_HOME_URL, user_data_dir, validate_telemost_url, validate_profile_url
+from storage import ALERT_DEFAULTS, Lecture, LectureStore, TELEMOST_HOME_URL, user_data_dir, validate_telemost_url, validate_profile_url
 from power import SleepInhibitor
+from notifications import HiddenWindowAlerts
 
 
 DATE_FORMAT = "%Y-%m-%d %H:%M"
@@ -54,7 +55,7 @@ class DesktopApi:
 
     def __init__(self, store: LectureStore | None = None, *, scheduler_factory=None,
                  event_runner: Callable | None = None, recording_checker: Callable | None = None,
-                 sleep_inhibitor=None):
+                 sleep_inhibitor=None, alert_backend=None):
         self._store = store or LectureStore()
         self._store.recover_interrupted()
         self._scheduler_factory = scheduler_factory
@@ -64,7 +65,10 @@ class DesktopApi:
         self._lock = threading.RLock()
         self._message = "Расписание на паузе"
         settings = self._store.get_settings()
-        self._config = {key: settings[key] for key in ("ffmpeg_path", "recordings_dir", "prevent_sleep")}
+        self._config = {key: settings[key] for key in (
+            "ffmpeg_path", "recordings_dir", "prevent_sleep", "default_duration_minutes", *ALERT_DEFAULTS)}
+        self._alerts = HiddenWindowAlerts(self._config, alert_backend)
+        self._meeting_target = None
         self._sleep = sleep_inhibitor if sleep_inhibitor is not None else SleepInhibitor()
         self._schedule_enabled = False
         self._recording_active = False
@@ -92,6 +96,30 @@ class DesktopApi:
         self._sleep.set_active(self._config["prevent_sleep"] and
                                (self._schedule_enabled or self._recording_active))
 
+    def _on_visibility(self, hidden, target=None):
+        with self._lock:
+            self._meeting_target = target
+            self._alerts.update(bool(hidden) and not self._closing)
+
+    def restore_meeting(self):
+        def restore():
+            with self._lock:
+                if self._meeting_target is None or self._closing:
+                    raise ValueError("Нет открытого окна встречи.")
+                from recording import restore_target
+                restore_target(self._meeting_target)
+        return self._reply(restore)
+
+    def preview_alert_sound(self, payload):
+        def preview():
+            if not isinstance(payload, dict):
+                raise ValueError("Укажите громкость предупреждения.")
+            with self._lock:
+                if self._closing:
+                    raise ValueError("Приложение закрывается.")
+                self._alerts.preview(payload.get("volume"))
+        return self._reply(preview)
+
     def _run(self, lecture: Lecture, cancel_event):
         with self._lock:
             self._recording_active = True
@@ -100,15 +128,18 @@ class DesktopApi:
             with self._lock:
                 self._sync_power()
             runner = self._event_runner
+            options = {}
             if runner is None:
                 from integrations import run_lecture
                 runner = run_lecture
-            output = runner(lecture, config, cancel_event=cancel_event, status_callback=self._on_status)
+                options["visibility_callback"] = self._on_visibility
+            output = runner(lecture, config, cancel_event=cancel_event, status_callback=self._on_status, **options)
             with self._lock:
                 self._last_recording = output
             return output
         finally:
             with self._lock:
+                self._on_visibility(False)
                 self._recording_active = False
                 self._sync_power()
 
@@ -152,6 +183,7 @@ class DesktopApi:
                     self._store.save_settings(old)
                     self._sync_power()
                     raise
+                self._alerts.configure(self._config)
                 return dict(self._config)
         return self._reply(save)
 
@@ -186,6 +218,7 @@ class DesktopApi:
                                       "active_lecture_id": scheduler.active_lecture_id if scheduler else None,
                                       "message": self._message, "closing": self._closing},
                         "account_login": self._account_active(),
+                        "alerts": self._alerts.state(),
                         "sleep_prevented": self._sleep.active, "last_recording": self._last_recording}
         return self._reply(state)
 
@@ -244,6 +277,36 @@ class DesktopApi:
                     self._sync_power()
                     raise
                 return None
+        return self._reply(join)
+
+    def quick_join(self, payload):
+        def join():
+            if not isinstance(payload, dict):
+                raise ValueError("Укажите ссылку и время окончания.")
+            url = payload.get("url")
+            if not isinstance(url, str) or len(url) > 2048:
+                raise ValueError("Укажите ссылку на Телемост длиной до 2048 символов.")
+            url = validate_telemost_url(url)
+            now = datetime.now().replace(microsecond=0)
+            end = _local_datetime(payload.get("ends_at"), "окончание лекции")
+            if end <= now:
+                raise ValueError("Время окончания должно быть в будущем.")
+            lecture = Lecture(None, "Быстрое подключение", url, now, end, lead_minutes=0)
+            with self._lock:
+                scheduler = self._ensure_scheduler()
+                if scheduler.active:
+                    raise ValueError("Другая лекция уже запущена.")
+                self._recording_active = True
+                try:
+                    self._sync_power()
+                    lecture_id = scheduler.start_quick(lecture)
+                    if lecture_id is None:
+                        raise ValueError("Не удалось подключиться: другая лекция уже запущена или время истекло.")
+                except Exception:
+                    self._recording_active = False
+                    self._sync_power()
+                    raise
+                return {"id": lecture_id}
         return self._reply(join)
 
     def set_scheduler(self, payload):
@@ -313,6 +376,7 @@ class DesktopApi:
             if self._closing:
                 return False
             self._closing = True
+            self._alerts.close()
             self._schedule_enabled = False
             self._account_cancel.set()
             self._sync_power()
@@ -383,6 +447,8 @@ def main() -> None:
                                        width=1220, height=820, min_size=(820, 600),
                                        background_color="#171819", text_select=True)
         window.events.closing += lambda: api._request_close(window)
+        api._alerts.backend.window = window
+        window.events.closed += api._alerts.close
         webview.start(http_server=True, private_mode=True)
 
 
