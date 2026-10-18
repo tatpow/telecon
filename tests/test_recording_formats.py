@@ -55,6 +55,9 @@ class RecordingFormatTests(unittest.TestCase):
 
 class MP4FinalizationTests(unittest.TestCase):
     def setUp(self):
+        monitor = patch('recording.monitor_size', return_value=(1920,1080))
+        monitor.start()
+        self.addCleanup(monitor.stop)
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         self.directory = Path(temporary.name).resolve()

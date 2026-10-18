@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import logging
 import math
+import re
 import struct
 import subprocess
 import tempfile
@@ -135,7 +136,8 @@ def run_self_check(report_path: Path) -> int:
                 recorder = None
                 report["checks"]["minimum_recording_duration"] = True
 
-                recorder = FFmpegRecorder(target, dict(config, recording_format="mp4"), 0)
+                recorder = FFmpegRecorder(target, dict(config, recording_format="mp4", recording_fps=7,
+                                          recording_width=640, recording_height=360, recording_quality="compact"), 0)
                 recorder.start()
                 for _ in range(4):
                     page.wait_for_timeout(500)
@@ -144,12 +146,32 @@ def run_self_check(report_path: Path) -> int:
                 assert Path(mp4_output).suffix == ".mp4" and recorder.result()["status"] == "saved"
                 header = Path(mp4_output).read_bytes()
                 assert header[4:8] == b"ftyp" and 0 < header.find(b"moov") < header.find(b"mdat")
-                subprocess.run([executable, "-v", "error", "-i", mp4_output, "-map", "0:v:0",
+                custom_probe = subprocess.run([executable, "-hide_banner", "-i", mp4_output, "-map", "0:v:0",
                                 "-map", "0:a:0", "-f", "null", "-"],
                                capture_output=True, check=True, timeout=20, creationflags=subprocess.CREATE_NO_WINDOW)
+                custom_header = custom_probe.stderr.decode("utf-8", errors="replace")
+                assert "640x360" in custom_header and re.search(r"\b7 fps\b", custom_header)
+                assert recorder.video["crf"] == 28
+                report["video_settings"] = {"custom_mp4": {"width": 640, "height": 360, "fps": 7, "crf": 28}}
+                report["checks"]["custom_video_settings"] = True
                 assert not list((directory / "recordings").glob("*.partial.*"))
                 recorder = None
                 report["checks"]["mp4_recording"] = True
+
+                recorder = FFmpegRecorder(target, dict(config, recording_fps=60, recording_width=640,
+                                          recording_height=360, recording_quality="economy"), 0)
+                recorder.start()
+                for _ in range(4):
+                    page.wait_for_timeout(500)
+                    recorder.check()
+                fps_output = recorder.stop()
+                fps_probe = subprocess.run([executable, "-hide_banner", "-i", fps_output, "-map", "0:v:0",
+                                           "-map", "0:a:0", "-f", "null", "-"], capture_output=True,
+                                           check=True, timeout=20, creationflags=subprocess.CREATE_NO_WINDOW)
+                assert re.search(rb"\b60 fps\b", fps_probe.stderr) and b"640x360" in fps_probe.stderr
+                report["video_settings"]["fps_60_mkv"] = {"width":640,"height":360,"fps":60,"crf":32}
+                report["checks"]["fps_60_recording"] = True
+                recorder = None
 
                 media_store = LectureStore(directory / "media-check.sqlite3")
                 now = datetime.now()

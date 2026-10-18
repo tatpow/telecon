@@ -92,6 +92,9 @@ class RecordingFileTests(unittest.TestCase):
 
 class MinimumRecordingTests(unittest.TestCase):
     def setUp(self):
+        monitor = patch('recording.monitor_size', return_value=(1920,1080))
+        monitor.start()
+        self.addCleanup(monitor.stop)
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.recorder = FFmpegRecorder(BrowserTarget(1, 123), {"recordings_dir": self.temp.name, "minimum_recording_minutes": 1}, 8)

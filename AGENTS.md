@@ -19,6 +19,7 @@ to change the user's requirements.
 - `integrations.py` owns Playwright/Telemost and the recording lifecycle.
 - `recording.py` owns FFmpeg, Windows Graphics Capture, and per-process WASAPI audio.
 - `recording_names.py` owns the filename template vocabulary and safe fallback names.
+- `video_settings.py` owns video controls, validation and physical monitor dimensions.
 - `notifications.py` owns optional sound, Windows notifications and taskbar badges.
 - `power.py` owns temporary Windows power requests while scheduling/recording.
 - `tests/` contains standard-library `unittest` tests.
@@ -52,6 +53,15 @@ and document limitations.
   keeping H.264/AAC quality. Apply the minimum duration before conversion, validate
   both MP4 tracks, and retain the original MKV if conversion fails. Include both
   extensions in ownership checks. Verify both formats in the packaged self-check.
+- Recording controls: quality presets map to CRF 18/23/28/32; FPS is an integer
+  from 1 to 60, including custom values. Auto resolution (0,0) fits 1920x1080
+  within the meeting window's physical monitor. Custom sizes must be even, at
+  least 64 pixels per side, and cannot exceed the settings window's monitor.
+  Recheck the actual meeting monitor at startup and proportionally reduce saved
+  sizes if needed. Keep frame buffers, scaling, WGC interval, writer timing and
+  FFmpeg input dimensions/FPS consistent. Preserve aspect ratio and black padding.
+  New settings apply to new recordings only. Verify custom FPS and 60 FPS in
+  actual MKV/MP4 media, not only the generated command.
 - Allowed filename attributes: `{name}`, `{date}` (DDMMYY), `{date_iso}`,
   `{time}` (actual start), `{time_end}` (actual end), `{duration}`
   (actual whole minutes, rounded down). Migrate saved `{длительность}` to
@@ -97,7 +107,7 @@ sync with [README.md](README.md) and [CHECKS.md](CHECKS.md).
 - Windows x64: build on Windows with CPython 3.12, install
   `requirements-build.lock.txt`, install Playwright Chromium, run unittest, then
   `python build_windows.py --version VERSION --no-hashsum` with a fresh release
-  label (such as `v0.3.1b`) or a numeric version. This includes FFmpeg, Chromium,
+  label (such as `v0.3.2b`) or a numeric version. This includes FFmpeg, Chromium,
   C++ runtime DLLs and documentation; the packaged EXE self-check must pass before
   ZIP creation. Checks include camera-dialog recovery, minimizing/restoring capture,
   filename templates, short-video filtering and both deletion modes. No-hashsum

@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Iterator, Optional
 from urllib.parse import urlsplit, urlunsplit
 from recording_names import DEFAULT_RECORDING_TEMPLATE, RECORDING_FORMATS
+from video_settings import VIDEO_DEFAULTS, validate_video_settings
 
 
 APP_NAME = "LectureAssistant"
@@ -35,6 +36,7 @@ SETTINGS_DEFAULTS = {
     "recording_name_template": DEFAULT_RECORDING_TEMPLATE,
     "recording_format": "mkv",
     "prevent_sleep": True,
+    **VIDEO_DEFAULTS,
     **ALERT_DEFAULTS,
 }
 
@@ -103,6 +105,7 @@ def _validate_settings(settings: dict) -> dict:
     if set(settings) - SETTINGS_DEFAULTS.keys():
         raise ValueError("Неизвестная настройка.")
     validated = dict(settings)
+    validate_video_settings(settings, partial=True)
     for key, value in settings.items():
         if key in ("alert_sound", "alert_notification", "alert_badge") and type(value) is not bool:
             raise ValueError("Способы предупреждения должны быть включены или выключены.")
@@ -386,6 +389,7 @@ class LectureStore:
 
     def save_settings(self, settings: dict) -> dict:
         validated = _validate_settings(settings)
+        validate_video_settings({**self.get_settings(), **validated})
         with self._connect() as connection:
             connection.executemany(
                 "INSERT INTO settings (name, value) VALUES (?, ?) "

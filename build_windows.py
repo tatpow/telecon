@@ -153,7 +153,7 @@ def main() -> None:
         raise SystemExit(f"Packaged self-check failed: {report}")
 
     source_files = ["app.py", "diagnostics.py", "integrations.py", "storage.py", "scheduler.py",
-                    "recording.py", "recording_names.py", "power.py", "notifications.py",
+                    "recording.py", "recording_names.py", "video_settings.py", "power.py", "notifications.py",
                     "ui/index.html", "ui/app.js", "ui/styles.css"]
     manifest = {
         "version": args.version, "windows_version": numeric_version,

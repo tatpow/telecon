@@ -114,6 +114,8 @@ class LectureRecordingTests(unittest.TestCase):
 
 class RecorderTests(unittest.TestCase):
     def setUp(self):
+        monitor = patch('recording.monitor_size', return_value=(1920,1080))
+        monitor.start();self.addCleanup(monitor.stop)
         self.temp=tempfile.TemporaryDirectory();self.addCleanup(self.temp.cleanup)
         self.directory=Path(self.temp.name)
         self.recorder=recording.FFmpegRecorder(recording.BrowserTarget(7,12345),{'recordings_dir':self.temp.name},7)

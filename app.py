@@ -67,7 +67,8 @@ class DesktopApi:
         settings = self._store.get_settings()
         self._config = {key: settings[key] for key in (
             "ffmpeg_path", "recordings_dir", "prevent_sleep", "default_duration_minutes",
-            "minimum_recording_minutes", "recording_name_template", "recording_format", *ALERT_DEFAULTS)}
+            "minimum_recording_minutes", "recording_name_template", "recording_format",
+            "recording_quality", "recording_fps", "recording_width", "recording_height", *ALERT_DEFAULTS)}
         self._alerts = HiddenWindowAlerts(self._config, alert_backend)
         self._meeting_target = None
         self._sleep = sleep_inhibitor if sleep_inhibitor is not None else SleepInhibitor()
@@ -179,6 +180,20 @@ class DesktopApi:
                 return dict(self._config)
         return self._reply(read)
 
+    def get_recording_options(self):
+        def read():
+            from video_settings import monitor_size, resolve_video_settings
+            hwnd = 0
+            window = getattr(self._alerts.backend, "window", None)
+            if window is not None and window.native is not None:
+                hwnd = int(window.native.Handle.ToInt64())
+            screen = monitor_size(hwnd)
+            with self._lock:
+                effective = resolve_video_settings(self._config, screen)
+            return {"screen_width": screen[0], "screen_height": screen[1], "max_fps": 60,
+                    "effective": effective}
+        return self._reply(read)
+
     def save_settings(self, payload):
         def save():
             if not isinstance(payload, dict) or set(payload) - self._config.keys():
@@ -190,6 +205,16 @@ class DesktopApi:
             with self._lock:
                 if self._closing:
                     raise ValueError("Приложение закрывается.")
+                from video_settings import validate_video_settings
+                merged = {**self._config, **payload}
+                validate_video_settings(merged)
+                if {"recording_width", "recording_height"} & payload.keys() and merged["recording_width"]:
+                    options = self.get_recording_options()
+                    if not options["ok"]:
+                        raise ValueError(options["error"])
+                    screen = options["data"]
+                    if merged["recording_width"] > screen["screen_width"] or merged["recording_height"] > screen["screen_height"]:
+                        raise ValueError(f"Разрешение записи не может превышать экран {screen['screen_width']}×{screen['screen_height']}.")
                 old = dict(self._config)
                 settings = self._store.save_settings(payload)
                 self._config = {key: settings[key] for key in old}

@@ -19,6 +19,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from recording_names import DEFAULT_RECORDING_TEMPLATE, RECORDING_FORMATS, recording_stem
+from video_settings import monitor_size, resolve_video_settings
 
 
 SOURCE_DIR = Path(__file__).resolve().parent
@@ -211,22 +212,23 @@ def restore_target(target: BrowserTarget) -> None:
         raise RuntimeError("Windows не восстановила окно Телемоста. Откройте его на панели задач.")
 
 
-def recording_command(executable: str, video_url: str, output: Path) -> list[str]:
+def recording_command(executable: str, video_url: str, output: Path, *, width=1920, height=1080, fps=15, crf=23) -> list[str]:
     return [executable, "-hide_banner", "-loglevel", "warning", "-n", "-nostats",
             "-progress", "pipe:1", "-stats_period", "0.25",
             "-thread_queue_size", "1024", "-probesize", "32", "-analyzeduration", "0",
             "-f", "f32le", "-ar", "48000", "-ac", "2", "-i", "pipe:0",
             "-thread_queue_size", "16", "-f", "rawvideo", "-pixel_format", "bgra",
-            "-video_size", "1920x1080", "-framerate", "15", "-probesize", "32",
+            "-video_size", f"{width}x{height}", "-framerate", str(fps), "-probesize", "32",
             "-analyzeduration", "0", "-i", video_url,
             "-map", "1:v:0", "-map", "0:a:0",
-            "-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-pix_fmt", "yuv420p",
+            "-c:v", "libx264", "-preset", "veryfast", "-crf", str(crf), "-pix_fmt", "yuv420p",
             "-c:a", "aac", "-b:a", "160k", "-shortest", "-shortest_buf_duration", "1", str(output)]
 
 
 class FFmpegRecorder:
     def __init__(self, target: BrowserTarget, settings: dict, lecture_id: int, *, lecture=None):
         self.target = target
+        self.video = resolve_video_settings(settings, monitor_size(target.hwnd))
         self.executable = ffmpeg_executable(settings.get("ffmpeg_path", ""))
         directory = recordings_directory(settings.get("recordings_dir", ""))
         token = uuid.uuid4().hex
@@ -252,7 +254,7 @@ class FFmpegRecorder:
         self._video_server = None
         self._video_connection = None
         self._video_frame = None
-        self._black_frame = bytes(1920 * 1080 * 4)
+        self._black_frame = bytes(self.video["width"] * self.video["height"] * 4)
         self._first_frame = threading.Event()
         self._queue = queue.Queue(maxsize=1024)
         self._stopping = threading.Event()
@@ -271,18 +273,19 @@ class FFmpegRecorder:
         import cv2
         import numpy as np
         self._capture = WindowsCapture(cursor_capture=False, draw_border=True,
-                                       secondary_window=False, minimum_update_interval=66,
+                                       secondary_window=False, minimum_update_interval=1000 // self.video["fps"],
                                        window_hwnd=self.target.hwnd)
         def on_frame_arrived(frame, control):
             if self._stopping.is_set():
                 control.stop()
                 return
             try:
-                ratio = min(1920 / frame.width, 1080 / frame.height)
+                canvas_width, canvas_height = self.video["width"], self.video["height"]
+                ratio = min(canvas_width / frame.width, canvas_height / frame.height)
                 width, height = max(1, round(frame.width*ratio)), max(1, round(frame.height*ratio))
                 resized = cv2.resize(frame.frame_buffer, (width, height), interpolation=cv2.INTER_AREA)
-                image = np.zeros((1080,1920,4), dtype=np.uint8)
-                x, y = (1920-width)//2, (1080-height)//2
+                image = np.zeros((canvas_height,canvas_width,4), dtype=np.uint8)
+                x, y = (canvas_width-width)//2, (canvas_height-height)//2
                 image[y:y+height,x:x+width] = resized
                 self._video_frame = image.tobytes()
                 self._first_frame.set()
@@ -331,7 +334,7 @@ class FFmpegRecorder:
             deadline = time.monotonic()
             while not self._stopping.is_set():
                 connection.sendall(self._output_frame())
-                deadline += 1/15
+                deadline += 1/self.video["fps"]
                 self._stopping.wait(max(0, deadline-time.monotonic()))
         except OSError as exc:
             if not self._stopping.is_set():
@@ -392,7 +395,8 @@ class FFmpegRecorder:
             self._video_server.settimeout(.2)
             video_url = f"tcp://127.0.0.1:{self._video_server.getsockname()[1]}"
             self._started_at = datetime.now()
-            self.process = subprocess.Popen(recording_command(self.executable, video_url, self.output),
+            self.process = subprocess.Popen(recording_command(self.executable, video_url, self.output,
+                                            **{key: self.video[key] for key in ("width", "height", "fps", "crf")}),
                                             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
             for function in (self._write_audio, self._write_video, self._read_progress, self._read_log):
