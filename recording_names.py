@@ -9,7 +9,8 @@ from urllib.parse import urlsplit
 
 
 DEFAULT_RECORDING_TEMPLATE = "{name}-{date}-{duration}"
-ATTRIBUTES = frozenset(("name", "date", "date_iso", "time", "time_end", "duration", "длительность"))
+RECORDING_FORMATS = ("mkv", "mp4")
+ATTRIBUTES = frozenset(("name", "date", "date_iso", "time", "time_end", "duration"))
 _FORBIDDEN = re.compile(r'[<>:"/\\|?*\x00-\x1f\x7f]')
 _RESERVED = re.compile(r"(?:CON|PRN|AUX|NUL|CONIN\$|CONOUT\$|COM[1-9¹²³]|LPT[1-9¹²³])(?:\..*)?", re.IGNORECASE)
 
@@ -38,7 +39,6 @@ def recording_stem(template: str, *, name: str, url: str, started_at: datetime,
         "time": started_at.strftime("%H-%M"), "time_end": ended_at.strftime("%H-%M"),
         "duration": str(math.floor(duration_seconds / 60)) if duration_seconds is not None else None,
     }
-    values["длительность"] = values["duration"]
     try:
         fragments = []
         for literal, field, spec, conversion in Formatter().parse(template):
@@ -48,7 +48,7 @@ def recording_stem(template: str, *, name: str, url: str, started_at: datetime,
                     raise ValueError("Unsupported filename attribute")
                 fragments.append(values[field])
         stem = "".join(fragments).strip()
-        if stem.lower().endswith(".mkv"):
+        if stem.lower().endswith(tuple("." + extension for extension in RECORDING_FORMATS)):
             stem = stem[:-4]
         if not _valid_stem(stem) or "{" in stem or "}" in stem:
             raise ValueError("Invalid filename")

@@ -23,10 +23,10 @@ py -3.12 -m venv build\builder-venv
 .\build\builder-venv\Scripts\python.exe -m pip install -r requirements-build.lock.txt
 .\build\builder-venv\Scripts\python.exe -m playwright install chromium
 .\build\builder-venv\Scripts\python.exe -m unittest discover -s tests -v
-.\build\builder-venv\Scripts\python.exe build_windows.py --version v0.3.0b --no-hashsum
+.\build\builder-venv\Scripts\python.exe build_windows.py --version v0.3.1b --no-hashsum
 ```
 
-Команда выше собирает релиз `v0.3.0b` с изменениями от 18 октября.
+Команда выше собирает релиз `v0.3.1b` с изменениями от 18 октября.
 Для следующих изменений задайте **новую** версию: существующий релиз
 не перезаписывается. Итог самопроверки готового EXE находится в `SELF-CHECK.json`.
 
@@ -47,18 +47,19 @@ Windows lock-файл содержит Windows wheels и не применяет
 синтетического видео/звука через FFmpeg, чёрное видео с продолжающимся звуком
 при сворачивании и возврат картинки, native-окно и Python bridge, запуск фонового
 обработчика в свёрнутом Телеконе, показ и снятие уведомления Windows и значка
-на панели задач, шаблон имени, удаление короткой записи, оба способа удаления
+на панели задач, шаблон имени, MKV и MP4 с читаемыми дорожками,
+удаление короткой записи, оба способа удаления
 карточки/файла и освобождение power request. Звук в самопроверке выключен. Корпоративная сессия и настоящие лекции не используются.
 
-Результаты — `dist/Telecon-Windows-x64-v0.3.0b/Telecon.exe` и ZIP всей папки.
+Результаты — `dist/Telecon-Windows-x64-v0.3.1b/Telecon.exe` и ZIP всей папки.
 Флаг `--no-hashsum` исключает файл `.zip.sha256` и хеши исходников из отчёта.
 Без этого флага контрольные суммы создаются, как в предыдущих сборках.
-Метка релиза `v0.3.0b` записывается в свойства EXE; числовая версия Windows —
-`0.3.0.0`. Поддерживаются также прежние версии вида `2026.10.17.1`. В релизе находятся `SELF-CHECK.json`, `BUILD-INFO.json` и
+Метка релиза `v0.3.1b` записывается в свойства EXE; числовая версия Windows —
+`0.3.1.0`. Поддерживаются также прежние версии вида `2026.10.17.1`. В релизе находятся `SELF-CHECK.json`, `BUILD-INFO.json` и
 `START-HERE.txt`. Распаковывайте всю папку, не копируйте один EXE.
 
 ```powershell
-.\dist\Telecon-Windows-x64-v0.3.0b\Telecon.exe --self-check "$env:TEMP\telecon-self-check.json"
+.\dist\Telecon-Windows-x64-v0.3.1b\Telecon.exe --self-check "$env:TEMP\telecon-self-check.json"
 ```
 
 `--skip-compile` предназначен только для повторной упаковки неизменённого

@@ -48,12 +48,17 @@ and document limitations.
   filtering; otherwise discard valid videos strictly below the configured number
   of minutes and persist an explanation on the card. Apply this to manual stops
   too. Preserve failed/unreadable partial recordings for recovery, reporting errors.
+- Offer MKV (default) and MP4. MP4 must remux validated MKV with stream copy,
+  keeping H.264/AAC quality. Apply the minimum duration before conversion, validate
+  both MP4 tracks, and retain the original MKV if conversion fails. Include both
+  extensions in ownership checks. Verify both formats in the packaged self-check.
 - Allowed filename attributes: `{name}`, `{date}` (DDMMYY), `{date_iso}`,
-  `{time}` (actual start), `{time_end}` (actual end), `{duration}` and
-  `{длительность}` (actual whole minutes, rounded down). Do not expose seconds,
+  `{time}` (actual start), `{time_end}` (actual end), `{duration}`
+  (actual whole minutes, rounded down). Migrate saved `{длительность}` to
+  `{duration}`; do not offer the removed alias. Do not expose seconds,
   planned duration or IDs as template attributes. Invalid names use the meeting
   ID in place of `{name}`; malformed templates use the meeting ID as the entire
-  filename. Do not prompt for these fallbacks. Append `.mkv` once and use numeric
+  filename. Do not prompt for these fallbacks. Append the selected extension once and use numeric
   collision suffixes without overwriting existing files. Never evaluate templates.
 - Keep Windows COM MTA support alive between capture workers and release capture
   callbacks on their owning thread. Verify sequential recordings after changing
@@ -92,7 +97,7 @@ sync with [README.md](README.md) and [CHECKS.md](CHECKS.md).
 - Windows x64: build on Windows with CPython 3.12, install
   `requirements-build.lock.txt`, install Playwright Chromium, run unittest, then
   `python build_windows.py --version VERSION --no-hashsum` with a fresh release
-  label (such as `v0.3.0b`) or a numeric version. This includes FFmpeg, Chromium,
+  label (such as `v0.3.1b`) or a numeric version. This includes FFmpeg, Chromium,
   C++ runtime DLLs and documentation; the packaged EXE self-check must pass before
   ZIP creation. Checks include camera-dialog recovery, minimizing/restoring capture,
   filename templates, short-video filtering and both deletion modes. No-hashsum

@@ -123,7 +123,7 @@ def run_self_check(report_path: Path) -> int:
                 assert Path(output).name.startswith("self-check-") and ".partial" not in Path(output).name
                 report["checks"]["recording_name_template"] = True
 
-                recorder = FFmpegRecorder(target, dict(config, minimum_recording_minutes=1), 0)
+                recorder = FFmpegRecorder(target, dict(config, minimum_recording_minutes=1, recording_format="mp4"), 0)
                 recorder.start()
                 for _ in range(4):
                     page.wait_for_timeout(500)
@@ -134,6 +134,22 @@ def run_self_check(report_path: Path) -> int:
                 assert short_result["duration_seconds"] < 60
                 recorder = None
                 report["checks"]["minimum_recording_duration"] = True
+
+                recorder = FFmpegRecorder(target, dict(config, recording_format="mp4"), 0)
+                recorder.start()
+                for _ in range(4):
+                    page.wait_for_timeout(500)
+                    recorder.check()
+                mp4_output = recorder.stop()
+                assert Path(mp4_output).suffix == ".mp4" and recorder.result()["status"] == "saved"
+                header = Path(mp4_output).read_bytes()
+                assert header[4:8] == b"ftyp" and 0 < header.find(b"moov") < header.find(b"mdat")
+                subprocess.run([executable, "-v", "error", "-i", mp4_output, "-map", "0:v:0",
+                                "-map", "0:a:0", "-f", "null", "-"],
+                               capture_output=True, check=True, timeout=20, creationflags=subprocess.CREATE_NO_WINDOW)
+                assert not list((directory / "recordings").glob("*.partial.*"))
+                recorder = None
+                report["checks"]["mp4_recording"] = True
 
                 media_store = LectureStore(directory / "media-check.sqlite3")
                 now = datetime.now()
@@ -146,6 +162,9 @@ def run_self_check(report_path: Path) -> int:
                 second = media_lecture()
                 media_store.save_recording(second, {"status": "saved", "path": output})
                 assert media_store.delete(second, delete_recording=True) and not Path(output).exists()
+                mp4_lecture = media_lecture()
+                media_store.save_recording(mp4_lecture, {"status": "saved", "path": mp4_output})
+                assert media_store.delete(mp4_lecture, delete_recording=True) and not Path(mp4_output).exists()
                 third = media_lecture()
                 media_store.save_recording(third, short_result)
                 assert media_store.recording_for(third)["note"], "Short recording explanation missing"

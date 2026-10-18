@@ -111,11 +111,15 @@ class NativeNotificationTests(unittest.TestCase):
                 self.assertEqual(sound.getnchannels(), 1)
                 self.assertEqual(sound.getframerate(), 22050)
                 count = sound.getnframes()
-                self.assertEqual(count, 7056)
+                self.assertGreater(count, 22050)
+                self.assertLess(count, 33075)
                 return struct.unpack(f"<{count}h", sound.readframes(count))
         full, quarter, silent = samples(100), samples(25), samples(0)
         self.assertAlmostEqual(max(quarter) / max(full), .25, places=3)
         self.assertEqual(max(map(abs, silent)), 0)
+        self.assertEqual(full[0], 0)
+        self.assertEqual(full[-1], 0)
+        self.assertLess(max(abs(b-a) for a, b in zip(full, full[1:])), 1800)
 
 
 if __name__ == "__main__":

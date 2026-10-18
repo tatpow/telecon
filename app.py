@@ -67,7 +67,7 @@ class DesktopApi:
         settings = self._store.get_settings()
         self._config = {key: settings[key] for key in (
             "ffmpeg_path", "recordings_dir", "prevent_sleep", "default_duration_minutes",
-            "minimum_recording_minutes", "recording_name_template", *ALERT_DEFAULTS)}
+            "minimum_recording_minutes", "recording_name_template", "recording_format", *ALERT_DEFAULTS)}
         self._alerts = HiddenWindowAlerts(self._config, alert_backend)
         self._meeting_target = None
         self._sleep = sleep_inhibitor if sleep_inhibitor is not None else SleepInhibitor()
@@ -126,10 +126,14 @@ class DesktopApi:
             if not isinstance(payload, dict) or not isinstance(payload.get("template"), str) or len(payload["template"]) > 300:
                 raise ValueError("Укажите шаблон имени файла до 300 символов.")
             from recording_names import recording_stem
+            from recording_names import RECORDING_FORMATS
+            extension = payload.get("format", self._config["recording_format"])
+            if extension not in RECORDING_FORMATS:
+                raise ValueError("Выберите формат видео MKV или MP4.")
             start = datetime.now().replace(second=0, microsecond=0)
             result = recording_stem(payload["template"], name="Название лекции", url="telemost.yandex.ru/j/1234567890",
                                     started_at=start, ended_at=start + timedelta(minutes=85), duration_seconds=85 * 60)
-            return {"filename": result["stem"] + ".mkv", "fallback": result["fallback"]}
+            return {"filename": result["stem"] + "." + extension, "fallback": result["fallback"]}
         return self._reply(preview)
 
     def _run(self, lecture: Lecture, cancel_event):

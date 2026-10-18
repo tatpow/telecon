@@ -12,7 +12,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Iterator, Optional
 from urllib.parse import urlsplit, urlunsplit
-from recording_names import DEFAULT_RECORDING_TEMPLATE
+from recording_names import DEFAULT_RECORDING_TEMPLATE, RECORDING_FORMATS
 
 
 APP_NAME = "LectureAssistant"
@@ -33,6 +33,7 @@ SETTINGS_DEFAULTS = {
     "default_duration_minutes": 90,
     "minimum_recording_minutes": 0,
     "recording_name_template": DEFAULT_RECORDING_TEMPLATE,
+    "recording_format": "mkv",
     "prevent_sleep": True,
     **ALERT_DEFAULTS,
 }
@@ -119,6 +120,8 @@ def _validate_settings(settings: dict) -> dict:
             raise ValueError("Минимальная длительность записи — целое число от 0 до 1440 минут.")
         if key == "recording_name_template" and (not isinstance(value, str) or len(value) > 300):
             raise ValueError("Шаблон имени файла должен содержать не более 300 символов.")
+        if key == "recording_format" and value not in RECORDING_FORMATS:
+            raise ValueError("Выберите формат видео MKV или MP4.")
         if key == "auto_start" and type(value) is not bool:
             raise ValueError("Автозапуск должен быть логическим значением.")
         if key == "prevent_sleep" and type(value) is not bool:
@@ -189,6 +192,15 @@ class LectureStore:
                 "lecture_id INTEGER PRIMARY KEY, path TEXT, status TEXT NOT NULL, "
                 "duration_seconds REAL, note TEXT, file_dev TEXT, file_ino TEXT)"
             )
+            row = connection.execute("SELECT value FROM settings WHERE name = 'recording_name_template'").fetchone()
+            if row:
+                try:
+                    template = json.loads(row["value"])
+                except (ValueError, TypeError):
+                    template = None
+                if isinstance(template, str) and "{длительность}" in template:
+                    connection.execute("UPDATE settings SET value = ? WHERE name = 'recording_name_template'",
+                                       (json.dumps(template.replace("{длительность}", "{duration}"), ensure_ascii=False),))
 
     @contextmanager
     def _connect(self) -> Iterator[sqlite3.Connection]:
@@ -269,7 +281,7 @@ class LectureStore:
     def _delete_recording_file(recording) -> None:
         path = Path(recording["path"])
         source = Path(__file__).resolve().parent
-        if not path.is_absolute() or path.suffix.lower() != ".mkv" or path.resolve() != path or path.is_relative_to(source):
+        if not path.is_absolute() or path.suffix.lower().lstrip(".") not in RECORDING_FORMATS or path.resolve() != path or path.is_relative_to(source):
             raise ValueError("Путь файла записи изменился. Удаление отменено.")
         try:
             info = path.lstat()
@@ -285,7 +297,7 @@ class LectureStore:
         device = inode = None
         if path:
             path = Path(path).absolute()
-            if (path.resolve() != path or path.suffix.lower() != ".mkv"
+            if (path.resolve() != path or path.suffix.lower().lstrip(".") not in RECORDING_FORMATS
                     or path.is_relative_to(Path(__file__).resolve().parent) or path.is_symlink()):
                 raise ValueError("Некорректный путь файла записи.")
             info = path.stat()

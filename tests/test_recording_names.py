@@ -15,9 +15,9 @@ class RecordingNamesTests(unittest.TestCase):
         arguments.update(values)
         return recording_stem(template, **arguments)
 
-    def test_all_approved_attributes_and_minute_alias(self):
-        result = self.render("{name}-{date}-{date_iso}-{time}-{time_end}-{duration}-{длительность}")
-        self.assertEqual(result["stem"], "История_архитектуры-181026-2026-10-18-11-56-13-21-85-85")
+    def test_all_approved_attributes(self):
+        result = self.render("{name}-{date}-{date_iso}-{time}-{time_end}-{duration}")
+        self.assertEqual(result["stem"], "История_архитектуры-181026-2026-10-18-11-56-13-21-85")
         self.assertFalse(result["fallback"])
 
     def test_name_with_forbidden_characters_uses_meeting_id_without_modifying_other_attributes(self):
@@ -36,12 +36,13 @@ class RecordingNamesTests(unittest.TestCase):
                 self.assertTrue(result["fallback"])
 
     def test_unapproved_attributes_are_not_exposed(self):
-        for field in ("id", "meeting_id", "duration_seconds", "planned_duration", "end_time"):
+        for field in ("id", "meeting_id", "duration_seconds", "planned_duration", "end_time", "длительность"):
             with self.subTest(field=field):
                 self.assertEqual(self.render("{" + field + "}")["stem"], "63943399915234")
 
     def test_extension_is_added_once_and_literal_names_are_allowed(self):
         self.assertEqual(self.render("{name}.mkv")["stem"], "История_архитектуры")
+        self.assertEqual(self.render("{name}.mp4")["stem"], "История_архитектуры")
         self.assertEqual(self.render("lecture")["stem"], "lecture")
 
     def test_date_belongs_to_start_when_recording_crosses_midnight(self):

@@ -18,7 +18,7 @@ from ctypes import wintypes
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from recording_names import DEFAULT_RECORDING_TEMPLATE, recording_stem
+from recording_names import DEFAULT_RECORDING_TEMPLATE, RECORDING_FORMATS, recording_stem
 
 
 SOURCE_DIR = Path(__file__).resolve().parent
@@ -232,6 +232,9 @@ class FFmpegRecorder:
         token = uuid.uuid4().hex
         self._final_output = None
         self.output = directory / f".recording-{token}.partial.mkv"
+        self.recording_format = settings.get("recording_format", "mkv")
+        if self.recording_format not in RECORDING_FORMATS:
+            raise ValueError("Выберите формат видео MKV или MP4.")
         self.name_template = settings.get("recording_name_template", DEFAULT_RECORDING_TEMPLATE)
         self._title = lecture.title if lecture is not None else "Лекция"
         self._url = lecture.url if lecture is not None else "https://telemost.yandex.ru/j/meeting"
@@ -432,6 +435,27 @@ class FFmpegRecorder:
                 "status": self.recording_status, "duration_seconds": self.duration_seconds,
                 "note": self.recording_note}
 
+    def _prepare_mp4(self):
+        original = self.output
+        converted = original.with_suffix(".mp4")
+        if converted.exists() or converted.is_symlink():
+            raise RuntimeError(f"Временный файл MP4 уже существует: {converted}. Исходная запись: {original}")
+        try:
+            result = _run_command([self.executable, "-hide_banner", "-loglevel", "error", "-n",
+                                   "-i", str(original), "-map", "0:v:0", "-map", "0:a:0",
+                                   "-c", "copy", "-movflags", "+faststart", str(converted)], timeout=900)
+            if result.returncode or not converted.is_file() or converted.stat().st_size == 0:
+                raise RuntimeError(result.stderr[-2000:] or "итоговый файл отсутствует или пуст")
+            check = _run_command([self.executable, "-hide_banner", "-i", str(converted),
+                                  "-map", "0:v:0", "-map", "0:a:0", "-t", "0.1", "-f", "null", "-"])
+            if check.returncode:
+                raise RuntimeError(check.stderr[-2000:])
+        except Exception as exc:
+            converted.unlink(missing_ok=True)
+            raise RuntimeError(f"Не удалось сохранить MP4: {exc}. Исходная запись сохранена: {original}") from exc
+        self.output = converted
+        original.unlink()
+
     def stop(self, *, validate: bool = True) -> str | None:
         if self._finalized:
             return self._result_path
@@ -506,13 +530,15 @@ class FFmpegRecorder:
                 self.recording_note = f"Видео не сохранено: запись короче {self.minimum_minutes} мин."
                 self._finalized = True
                 return None
+            if self.recording_format == "mp4":
+                self._prepare_mp4()
             rendered = recording_stem(self.name_template, name=self._title, url=self._url,
                                       started_at=self._started_at, ended_at=ended_at,
                                       duration_seconds=self.duration_seconds)
             number = 1
             while True:
                 suffix = f"-{number}" if number > 1 else ""
-                self._final_output = self.output.parent / f"{rendered['stem']}{suffix}.mkv"
+                self._final_output = self.output.parent / f"{rendered['stem']}{suffix}.{self.recording_format}"
                 try:
                     if os.name == "nt":
                         self.output.rename(self._final_output)

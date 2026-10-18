@@ -20,12 +20,18 @@ ALERT_MESSAGE = "Откройте окно Телемоста, чтобы вер
 def alert_wave(volume: int) -> bytes:
     """Scale our PCM samples, never the Windows or meeting audio volume."""
     rate = 22050
-    samples = []
-    for frequency in (660, 880):
-        count = round(rate * .16)
+    # Three overlapping plucked notes with smooth attacks and long decays.
+    samples = [0.0] * round(rate * 1.15)
+    for frequency, onset in ((523.25, 0), (659.25, .22), (783.99, .44)):
+        count = round(rate * .7)
+        offset = round(rate * onset)
         for index in range(count):
-            fade = min(1, index / (rate * .01), (count - 1 - index) / (rate * .01))
-            samples.append(round(12000 * volume / 100 * fade * math.sin(2 * math.pi * frequency * index / rate)))
+            seconds = index / rate
+            envelope = (1 - math.exp(-seconds / .025)) * math.exp(-seconds / .18)
+            envelope *= min(1, (count - 1 - index) / (rate * .08))
+            tone = math.sin(2 * math.pi * frequency * seconds) + .12 * math.sin(4 * math.pi * frequency * seconds)
+            samples[offset + index] += 7500 * envelope * tone
+    samples = [round(sample * volume / 100) for sample in samples]
     output = io.BytesIO()
     with wave.open(output, "wb") as sound:
         sound.setnchannels(1)
