@@ -63,6 +63,23 @@ class LectureRecordingTests(unittest.TestCase):
         self.recorder.stop.side_effect=RuntimeError('disk full')
         with self.assertRaisesRegex(RuntimeError,'disk full'):integrations.run_lecture(self.lecture,cancel_event=event)
         self.cleaned()
+    def test_short_cancelled_recording_publishes_discard_reason_and_cleans_up(self):
+        event = threading.Event()
+        self.recorder.check.side_effect = lambda: event.set()
+        self.recorder.stop.return_value = None
+        self.recorder.recording_note = 'Видео не сохранено: меньше 5 минут.'
+        self.recorder.result.side_effect = [
+            {'status': 'partial', 'path': 'temporary.mkv'},
+            {'status': 'discarded', 'path': None, 'duration_seconds': 1, 'note': self.recorder.recording_note},
+        ]
+        statuses, results = [], []
+        with self.assertRaises(integrations.LectureCancelled):
+            integrations.run_lecture(self.lecture, cancel_event=event, status_callback=statuses.append,
+                                     recording_callback=results.append)
+        self.assertEqual(results[-1]['status'], 'discarded')
+        self.assertIn(self.recorder.recording_note, statuses)
+        self.assertFalse(any(str(message).startswith('Запись сохранена') for message in statuses))
+        self.cleaned()
     def test_recorder_failure_is_not_reported_success(self):
         self.recorder.check.side_effect=RuntimeError('audio died');statuses=[]
         with self.assertRaisesRegex(RuntimeError,'audio died'):integrations.run_lecture(self.lecture,status_callback=statuses.append)

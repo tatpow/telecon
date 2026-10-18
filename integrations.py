@@ -348,7 +348,7 @@ def _join_telemost(
                 "организатора или изменился интерфейс. Запись не запущена."
             )
         _mute_devices_stably(meeting, cancel_event, outer_scope=page)
-        _report(status_callback, "Вход в Телемост подтверждён; запускаю запись FFmpeg…")
+        _report(status_callback, "Вход в Телемост подтверждён. Начинаем запись…")
         return playwright, context, page, meeting
     except Exception as exc:
         cleanup_errors = _close_browser(playwright, context)
@@ -424,7 +424,8 @@ def prepare_browser_profile(
 def run_lecture(lecture: Lecture, settings: dict | None = None, *,
                 cancel_event: threading.Event | None = None,
                 status_callback: StatusCallback | None = None,
-                visibility_callback: Callable | None = None) -> str:
+                visibility_callback: Callable | None = None,
+                recording_callback: Callable | None = None) -> str | None:
     """Record only the configured meeting browser window and its process audio."""
     _check_cancel(cancel_event)
     validate_telemost_url(lecture.url)
@@ -432,7 +433,7 @@ def run_lecture(lecture: Lecture, settings: dict | None = None, *,
         raise RuntimeError("Время окончания лекции уже прошло.")
     with _profile_access():
         config = dict(settings or {})
-        _report(status_callback, "Проверяю FFmpeg и захват звука процесса…")
+        _report(status_callback, "Проверяем возможность записи…")
         check_recorder(config)
         _check_cancel(cancel_event)
         playwright = context = recorder = None
@@ -446,10 +447,12 @@ def run_lecture(lecture: Lecture, settings: dict | None = None, *,
             if lecture.ends_at <= datetime.now(tz=lecture.ends_at.tzinfo):
                 raise RuntimeError("Время лекции истекло во время подключения.")
             target = browser_target(user_data_dir() / "browser-profile")
-            recorder = FFmpegRecorder(target, config, lecture.id)
+            recorder = FFmpegRecorder(target, config, lecture.id, lecture=lecture)
             recorder.start(cancel_event)
             recording_started = True
-            _report(status_callback, f"Идёт запись FFmpeg: {lecture.title}")
+            if recording_callback is not None:
+                recording_callback(recorder.result())
+            _report(status_callback, f"Идёт запись: {lecture.title}")
             while datetime.now(tz=lecture.ends_at.tzinfo) < lecture.ends_at:
                 _check_cancel(cancel_event)
                 if page.is_closed() or _first_visible(meeting, JOINED_SELECTORS) is None:
@@ -468,9 +471,15 @@ def run_lecture(lecture: Lecture, settings: dict | None = None, *,
                 try:
                     output = recorder.stop(validate=recording_started)
                     if recording_started:
-                        _report(status_callback, f"Запись сохранена: {output}")
+                        _report(status_callback, f"Запись сохранена: {output}" if output else recorder.recording_note)
                 except Exception as exc:
                     cleanup_errors.append(f"сохранение записи FFmpeg: {exc}")
+                finally:
+                    if recording_callback is not None:
+                        try:
+                            recording_callback(recorder.result())
+                        except Exception as exc:
+                            cleanup_errors.append(f"сохранение сведений о видео: {exc}")
             cleanup_errors.extend(_close_browser(playwright, context))
         if cleanup_errors:
             prefix = f"{error}; " if error is not None else ""

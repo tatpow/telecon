@@ -156,6 +156,7 @@ class LectureScheduler:
     def _run_lecture(self, lecture: Lecture, cancel: threading.Event) -> None:
         error = None
         cancelled = False
+        recording = None
         try:
             if not cancel.is_set():
                 self._notify(f"Подключение: {lecture.title}")
@@ -168,11 +169,14 @@ class LectureScheduler:
         finally:
             try:
                 self.store.finish(lecture.id, error, cancelled=cancelled)
+                recording = self.store.recording_for(lecture.id)
             except Exception as exc:
                 error = f"Не удалось сохранить результат: {str(exc) or type(exc).__name__}"
             finally:
                 if error:
                     self._notify(f"Ошибка «{lecture.title}»: {error}")
+                elif recording and recording["status"] == "discarded":
+                    self._notify(f"{lecture.title}: {recording['note']}")
                 elif cancelled:
                     self._notify(f"Остановлена: {lecture.title}")
                 else:

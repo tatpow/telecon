@@ -5,6 +5,7 @@ from build_windows import windows_version
 
 class BuildVersionTests(unittest.TestCase):
     def test_beta_label_maps_to_windows_numeric_version(self):
+        self.assertEqual(windows_version("v0.3.0b"), "0.3.0.0")
         self.assertEqual(windows_version("v0.2.0b"), "0.2.0.0")
         self.assertEqual(windows_version("v0.2.0b3"), "0.2.0.3")
         self.assertEqual(windows_version("v1.0.0rc2"), "1.0.0.2")

@@ -5,12 +5,14 @@ import json
 import re
 import sqlite3
 import sys
+import stat
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Iterator, Optional
 from urllib.parse import urlsplit, urlunsplit
+from recording_names import DEFAULT_RECORDING_TEMPLATE
 
 
 APP_NAME = "LectureAssistant"
@@ -29,6 +31,8 @@ SETTINGS_DEFAULTS = {
     "auto_start": False,
     "default_lead_minutes": 2,
     "default_duration_minutes": 90,
+    "minimum_recording_minutes": 0,
+    "recording_name_template": DEFAULT_RECORDING_TEMPLATE,
     "prevent_sleep": True,
     **ALERT_DEFAULTS,
 }
@@ -111,6 +115,10 @@ def _validate_settings(settings: dict) -> dict:
             raise ValueError("Опережение должно быть целым числом от 0 до 120 минут.")
         if key == "default_duration_minutes" and (type(value) is not int or not 1 <= value <= 1440):
             raise ValueError("Длительность пары должна быть целым числом от 1 до 1440 минут.")
+        if key == "minimum_recording_minutes" and (type(value) is not int or not 0 <= value <= 1440):
+            raise ValueError("Минимальная длительность записи — целое число от 0 до 1440 минут.")
+        if key == "recording_name_template" and (not isinstance(value, str) or len(value) > 300):
+            raise ValueError("Шаблон имени файла должен содержать не более 300 символов.")
         if key == "auto_start" and type(value) is not bool:
             raise ValueError("Автозапуск должен быть логическим значением.")
         if key == "prevent_sleep" and type(value) is not bool:
@@ -176,6 +184,11 @@ class LectureStore:
             connection.execute(
                 "CREATE TABLE IF NOT EXISTS settings (name TEXT PRIMARY KEY, value TEXT NOT NULL)"
             )
+            connection.execute(
+                "CREATE TABLE IF NOT EXISTS recordings ("
+                "lecture_id INTEGER PRIMARY KEY, path TEXT, status TEXT NOT NULL, "
+                "duration_seconds REAL, note TEXT, file_dev TEXT, file_ino TEXT)"
+            )
 
     @contextmanager
     def _connect(self) -> Iterator[sqlite3.Connection]:
@@ -236,12 +249,66 @@ class LectureStore:
             ).fetchall()
         return [self._to_lecture(row) for row in rows]
 
-    def delete(self, lecture_id: int) -> bool:
+    def delete(self, lecture_id: int, *, delete_recording: bool = False) -> bool:
         with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute("SELECT status FROM lectures WHERE id = ?", (lecture_id,)).fetchone()
+            if row is None or row["status"] == "running":
+                return False
+            if delete_recording:
+                recording = connection.execute("SELECT * FROM recordings WHERE lecture_id = ?", (lecture_id,)).fetchone()
+                if recording is not None and recording["path"]:
+                    self._delete_recording_file(recording)
+            connection.execute("DELETE FROM recordings WHERE lecture_id = ?", (lecture_id,))
             cursor = connection.execute(
                 "DELETE FROM lectures WHERE id = ? AND status != 'running'", (lecture_id,)
             )
             return cursor.rowcount == 1
+
+    @staticmethod
+    def _delete_recording_file(recording) -> None:
+        path = Path(recording["path"])
+        source = Path(__file__).resolve().parent
+        if not path.is_absolute() or path.suffix.lower() != ".mkv" or path.resolve() != path or path.is_relative_to(source):
+            raise ValueError("Путь файла записи изменился. Удаление отменено.")
+        try:
+            info = path.lstat()
+        except FileNotFoundError:
+            return
+        if (not stat.S_ISREG(info.st_mode) or path.is_symlink()
+                or (hex(info.st_dev), hex(info.st_ino)) != (recording["file_dev"], recording["file_ino"])):
+            raise ValueError("Файл записи заменён или больше не является обычным файлом. Удаление отменено.")
+        path.unlink()
+
+    def save_recording(self, lecture_id: int, result: dict) -> None:
+        path = result.get("path")
+        device = inode = None
+        if path:
+            path = Path(path).absolute()
+            if (path.resolve() != path or path.suffix.lower() != ".mkv"
+                    or path.is_relative_to(Path(__file__).resolve().parent) or path.is_symlink()):
+                raise ValueError("Некорректный путь файла записи.")
+            info = path.stat()
+            if not stat.S_ISREG(info.st_mode):
+                raise ValueError("Файл записи не является обычным файлом.")
+            # Windows can expose 128-bit file IDs, wider than SQLite INTEGER.
+            device, inode = hex(info.st_dev), hex(info.st_ino)
+            path = str(path)
+        with self._connect() as connection:
+            connection.execute(
+                "INSERT INTO recordings (lecture_id, path, status, duration_seconds, note, file_dev, file_ino) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(lecture_id) DO UPDATE SET "
+                "path=excluded.path, status=excluded.status, duration_seconds=excluded.duration_seconds, "
+                "note=excluded.note, file_dev=excluded.file_dev, file_ino=excluded.file_ino",
+                (lecture_id, path, result["status"], result.get("duration_seconds"), result.get("note"), device, inode),
+            )
+
+    def recording_for(self, lecture_id: int) -> Optional[dict]:
+        with self._connect() as connection:
+            row = connection.execute("SELECT * FROM recordings WHERE lecture_id = ?", (lecture_id,)).fetchone()
+        if row is None:
+            return None
+        return dict(row)
 
     def claim_due(self, now: datetime) -> Optional[Lecture]:
         return self._claim(now)

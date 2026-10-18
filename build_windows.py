@@ -110,14 +110,14 @@ def main() -> None:
     # Preserve the revision directory expected by the packaged Playwright driver.
     browser_directory = chromium.parent.parent
     shutil.copytree(browser_directory, release / "ms-playwright" / browser_directory.name)
-    for name in ("README.md", "AGENTS.md", "BUILDING.md", "CHECKS.md", "LICENSE"):
+    for name in ("README.md", "AGENTS.md", "BUILDING.md", "CHECKS.md", "RELEASE_NOTES.md", "LICENSE"):
         shutil.copy2(ROOT / name, release / name)
     (release / "START-HERE.txt").write_text(
         f"Телекон {args.version} для Windows x64\n\n"
         "Распакуйте весь архив в отдельную папку и запустите Telecon.exe.\n"
         "Не переносите EXE отдельно: рядом нужны DLL, ui, ffmpeg.exe и ms-playwright.\n"
         "Python и OBS устанавливать не нужно. Требуется Microsoft Edge WebView2 Runtime.\n"
-        "Настройки: «Запись и аккаунт». Войдите корпоративным аккаунтом Яндекса.\n"
+        "Откройте «Настройки» и войдите корпоративным аккаунтом Яндекса.\n"
         "Вход открывает главную https://telemost.yandex.ru/; ссылку на созвон добавляйте в карточку лекции.\n"
         "По умолчанию видео сохраняется в Видео/Telecon.\n"
         "Опция предотвращения сна действует при расписании/записи; блокировку Windows не отключает.\n",
@@ -153,7 +153,8 @@ def main() -> None:
         raise SystemExit(f"Packaged self-check failed: {report}")
 
     source_files = ["app.py", "diagnostics.py", "integrations.py", "storage.py", "scheduler.py",
-                    "recording.py", "power.py", "notifications.py", "ui/index.html", "ui/app.js", "ui/styles.css"]
+                    "recording.py", "recording_names.py", "power.py", "notifications.py",
+                    "ui/index.html", "ui/app.js", "ui/styles.css"]
     manifest = {
         "version": args.version, "windows_version": numeric_version,
         "python": sys.version, "platform": platform.platform(),

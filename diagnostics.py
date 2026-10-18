@@ -25,11 +25,12 @@ def run_self_check(report_path: Path) -> int:
         from integrations import _start_playwright, _mute_devices_stably
         from power import SleepInhibitor
         from recording import FFmpegRecorder, browser_target, check_recorder, target_minimized
-        from storage import LectureStore
+        from storage import Lecture, LectureStore
 
         with tempfile.TemporaryDirectory(prefix="telecon-build-check-", ignore_cleanup_errors=True) as temporary:
             directory = Path(temporary)
-            config = {"recordings_dir": str(directory / "recordings")}
+            config = {"recordings_dir": str(directory / "recordings"),
+                      "recording_name_template": "self-check-{date_iso}-{duration}"}
             report["recorder"] = check_recorder(config)
             report["checks"]["ffmpeg_and_native_modules"] = True
             guard = SleepInhibitor()
@@ -119,6 +120,36 @@ def run_self_check(report_path: Path) -> int:
                 assert minimized_rms > .001, "Process audio stopped while minimized"
                 report["media"]["minimized_audio_rms"] = minimized_rms
                 report["checks"]["minimized_recording_and_restore"] = True
+                assert Path(output).name.startswith("self-check-") and ".partial" not in Path(output).name
+                report["checks"]["recording_name_template"] = True
+
+                recorder = FFmpegRecorder(target, dict(config, minimum_recording_minutes=1), 0)
+                recorder.start()
+                for _ in range(4):
+                    page.wait_for_timeout(500)
+                    recorder.check()
+                assert recorder.stop() is None, "Short recording was saved"
+                short_result = recorder.result()
+                assert short_result["status"] == "discarded" and short_result["path"] is None
+                assert short_result["duration_seconds"] < 60
+                recorder = None
+                report["checks"]["minimum_recording_duration"] = True
+
+                media_store = LectureStore(directory / "media-check.sqlite3")
+                now = datetime.now()
+                def media_lecture():
+                    return media_store.add(Lecture(None, "Synthetic media check", "telemost.yandex.ru/j/test",
+                                                   now, now + timedelta(minutes=1)))
+                first = media_lecture()
+                media_store.save_recording(first, {"status": "saved", "path": output})
+                assert media_store.delete(first) and Path(output).is_file(), "Calendar deletion removed video"
+                second = media_lecture()
+                media_store.save_recording(second, {"status": "saved", "path": output})
+                assert media_store.delete(second, delete_recording=True) and not Path(output).exists()
+                third = media_lecture()
+                media_store.save_recording(third, short_result)
+                assert media_store.recording_for(third)["note"], "Short recording explanation missing"
+                report["checks"]["calendar_and_video_deletion"] = True
             finally:
                 try:
                     if recorder is not None:

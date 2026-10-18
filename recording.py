@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 import ctypes
+import atexit
 import os
 import queue
+import re
 import socket
 import subprocess
 import sys
@@ -16,9 +18,43 @@ from ctypes import wintypes
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+from recording_names import DEFAULT_RECORDING_TEMPLATE, recording_stem
 
 
 SOURCE_DIR = Path(__file__).resolve().parent
+
+
+class _CaptureRuntime:
+    """Keep COM's MTA alive between sequential recording worker threads."""
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._ole = None
+        self._cookie = None
+
+    def ensure(self):
+        with self._lock:
+            if self._cookie is not None:
+                return
+            ole = ctypes.WinDLL("ole32")
+            ole.CoIncrementMTAUsage.argtypes = [ctypes.POINTER(ctypes.c_void_p)]
+            ole.CoIncrementMTAUsage.restype = ctypes.c_long
+            ole.CoDecrementMTAUsage.argtypes = [ctypes.c_void_p]
+            ole.CoDecrementMTAUsage.restype = ctypes.c_long
+            cookie = ctypes.c_void_p()
+            result = ole.CoIncrementMTAUsage(ctypes.byref(cookie))
+            if result < 0 or not cookie.value:
+                raise RuntimeError(f"Не удалось подготовить захват окна: COM {result:#x}")
+            self._ole, self._cookie = ole, cookie
+            atexit.register(self.close)
+
+    def close(self):
+        with self._lock:
+            if self._cookie is not None:
+                cookie, self._cookie = self._cookie, None
+                self._ole.CoDecrementMTAUsage(cookie)
+
+
+_capture_runtime = _CaptureRuntime()
 
 
 class RecordingCancelled(RuntimeError):
@@ -189,12 +225,23 @@ def recording_command(executable: str, video_url: str, output: Path) -> list[str
 
 
 class FFmpegRecorder:
-    def __init__(self, target: BrowserTarget, settings: dict, lecture_id: int):
+    def __init__(self, target: BrowserTarget, settings: dict, lecture_id: int, *, lecture=None):
         self.target = target
         self.executable = ffmpeg_executable(settings.get("ffmpeg_path", ""))
         directory = recordings_directory(settings.get("recordings_dir", ""))
-        stamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-        self.output = directory / f"{stamp}_lecture-{lecture_id}_{uuid.uuid4().hex[:8]}.mkv"
+        token = uuid.uuid4().hex
+        self._final_output = None
+        self.output = directory / f".recording-{token}.partial.mkv"
+        self.name_template = settings.get("recording_name_template", DEFAULT_RECORDING_TEMPLATE)
+        self._title = lecture.title if lecture is not None else "Лекция"
+        self._url = lecture.url if lecture is not None else "https://telemost.yandex.ru/j/meeting"
+        self._started_at = datetime.now()
+        self.minimum_minutes = settings.get("minimum_recording_minutes", 0)
+        self.duration_seconds = None
+        self.recording_status = "partial"
+        self.recording_note = None
+        self._finalized = False
+        self._result_path = None
         self.process = None
         self.audio = None
         self._capture = None
@@ -216,6 +263,7 @@ class FFmpegRecorder:
         self._audio_bytes = 0
 
     def _start_video(self, cancel_event):
+        _capture_runtime.ensure()
         from windows_capture import WindowsCapture
         import cv2
         import numpy as np
@@ -340,6 +388,7 @@ class FFmpegRecorder:
             self._video_server.listen(1)
             self._video_server.settimeout(.2)
             video_url = f"tcp://127.0.0.1:{self._video_server.getsockname()[1]}"
+            self._started_at = datetime.now()
             self.process = subprocess.Popen(recording_command(self.executable, video_url, self.output),
                                             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
@@ -378,15 +427,32 @@ class FFmpegRecorder:
             raise RuntimeError("FFmpeg не передаёт кадры видео более 10 секунд.")
         check_target(self.target)
 
-    def stop(self, *, validate: bool = True) -> str:
+    def result(self) -> dict:
+        return {"path": str(self.output) if self.output.is_file() else None,
+                "status": self.recording_status, "duration_seconds": self.duration_seconds,
+                "note": self.recording_note}
+
+    def stop(self, *, validate: bool = True) -> str | None:
+        if self._finalized:
+            return self._result_path
+        ended_at = datetime.now()
         self._stopping.set()
         errors = []
+        video_stopped = self._video_control is None
         if self._video_control is not None:
             try:
                 self._video_control.stop()
+                video_stopped = True
             except Exception as exc:
                 errors.append(f"остановка захвата окна: {exc}")
             self._video_control = None
+        if self._capture is not None and video_stopped:
+            # Release the native capture and bound callbacks on the thread that
+            # created them, rather than in a later GC cycle on another worker.
+            self._capture.frame_handler = None
+            self._capture.closed_handler = None
+            self._capture.capture = None
+            self._capture = None
         if self.audio is not None:
             try:
                 self.audio.close()
@@ -420,10 +486,44 @@ class FFmpegRecorder:
             if not self.output.is_file() or self.output.stat().st_size == 0:
                 errors.append("файл записи отсутствует или пуст")
             elif not errors:
-                result = _run_command([self.executable, "-v", "error", "-i", str(self.output),
+                result = _run_command([self.executable, "-hide_banner", "-i", str(self.output),
                                        "-map", "0:v:0", "-map", "0:a:0", "-t", "0.1", "-f", "null", "-"])
                 if result.returncode:
                     errors.append("не подтверждены читаемые видео- и аудиодорожки: " + result.stderr[-2000:])
+                elif isinstance(result.stderr, str):
+                    duration = re.search(r"Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)", result.stderr)
+                    if duration:
+                        hours, minutes, seconds = map(float, duration.groups())
+                        self.duration_seconds = hours * 3600 + minutes * 60 + seconds
+                if self.minimum_minutes and self.duration_seconds is None:
+                    errors.append("не удалось определить фактическую длительность записи")
         if errors:
             raise RuntimeError("; ".join(errors) + f". Файл: {self.output}")
-        return str(self.output)
+        if validate:
+            if self.minimum_minutes and self.duration_seconds < self.minimum_minutes * 60:
+                self.output.unlink()
+                self.recording_status = "discarded"
+                self.recording_note = f"Видео не сохранено: запись короче {self.minimum_minutes} мин."
+                self._finalized = True
+                return None
+            rendered = recording_stem(self.name_template, name=self._title, url=self._url,
+                                      started_at=self._started_at, ended_at=ended_at,
+                                      duration_seconds=self.duration_seconds)
+            number = 1
+            while True:
+                suffix = f"-{number}" if number > 1 else ""
+                self._final_output = self.output.parent / f"{rendered['stem']}{suffix}.mkv"
+                try:
+                    if os.name == "nt":
+                        self.output.rename(self._final_output)
+                    else:
+                        os.link(self.output, self._final_output)
+                        self.output.unlink()
+                    break
+                except FileExistsError:
+                    number += 1
+            self.output = self._final_output
+            self.recording_status = "saved"
+            self._finalized = True
+        self._result_path = str(self.output)
+        return self._result_path

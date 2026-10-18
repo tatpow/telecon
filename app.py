@@ -66,7 +66,8 @@ class DesktopApi:
         self._message = "Расписание на паузе"
         settings = self._store.get_settings()
         self._config = {key: settings[key] for key in (
-            "ffmpeg_path", "recordings_dir", "prevent_sleep", "default_duration_minutes", *ALERT_DEFAULTS)}
+            "ffmpeg_path", "recordings_dir", "prevent_sleep", "default_duration_minutes",
+            "minimum_recording_minutes", "recording_name_template", *ALERT_DEFAULTS)}
         self._alerts = HiddenWindowAlerts(self._config, alert_backend)
         self._meeting_target = None
         self._sleep = sleep_inhibitor if sleep_inhibitor is not None else SleepInhibitor()
@@ -120,6 +121,17 @@ class DesktopApi:
                 self._alerts.preview(payload.get("volume"))
         return self._reply(preview)
 
+    def preview_recording_name(self, payload):
+        def preview():
+            if not isinstance(payload, dict) or not isinstance(payload.get("template"), str) or len(payload["template"]) > 300:
+                raise ValueError("Укажите шаблон имени файла до 300 символов.")
+            from recording_names import recording_stem
+            start = datetime.now().replace(second=0, microsecond=0)
+            result = recording_stem(payload["template"], name="Название лекции", url="telemost.yandex.ru/j/1234567890",
+                                    started_at=start, ended_at=start + timedelta(minutes=85), duration_seconds=85 * 60)
+            return {"filename": result["stem"] + ".mkv", "fallback": result["fallback"]}
+        return self._reply(preview)
+
     def _run(self, lecture: Lecture, cancel_event):
         with self._lock:
             self._recording_active = True
@@ -133,6 +145,7 @@ class DesktopApi:
                 from integrations import run_lecture
                 runner = run_lecture
                 options["visibility_callback"] = self._on_visibility
+                options["recording_callback"] = lambda result: self._store.save_recording(lecture.id, result)
             output = runner(lecture, config, cancel_event=cancel_event, status_callback=self._on_status, **options)
             with self._lock:
                 self._last_recording = output
@@ -202,12 +215,16 @@ class DesktopApi:
         def state():
             lectures = []
             for lecture in self._store.list_all():
+                recording = self._store.recording_for(lecture.id)
                 lectures.append({
                     "id": lecture.id, "title": lecture.title, "url": lecture.url,
                     "starts_at": lecture.starts_at.isoformat(timespec="seconds"),
                     "ends_at": lecture.ends_at.isoformat(timespec="seconds"),
                     "lead_minutes": lecture.lead_minutes, "status": lecture.status,
                     "error": self._store.error_for(lecture.id),
+                    "recording": ({"status": recording["status"], "duration_seconds": recording["duration_seconds"],
+                                   "note": recording["note"], "filename": Path(recording["path"]).name if recording["path"] else None}
+                                  if recording else None),
                 })
             lectures.sort(key=lambda item: (item["starts_at"], item["id"]))
             with self._lock:
@@ -249,14 +266,20 @@ class DesktopApi:
             return {"id": lecture_id}
         return self._reply(save)
 
-    def delete_lecture(self, lecture_id):
+    def delete_lecture(self, payload):
         def delete():
+            lecture_id = payload.get("id") if isinstance(payload, dict) else payload
+            delete_file = payload.get("delete_recording", False) if isinstance(payload, dict) else False
+            if type(delete_file) is not bool:
+                raise ValueError("Выберите способ удаления лекции.")
+            if delete_file and payload.get("confirmed") is not True:
+                raise ValueError("Подтвердите удаление файла записи.")
             lecture = self._store.get(_positive_id(lecture_id))
             if lecture is None:
                 raise ValueError("Лекция не найдена.")
             if lecture.status == "running":
                 raise ValueError("Сначала остановите текущую запись.")
-            if not self._store.delete(lecture_id):
+            if not self._store.delete(lecture_id, delete_recording=delete_file):
                 raise ValueError("Лекцию не удалось удалить: её состояние изменилось. Обновите расписание.")
             return None
         return self._reply(delete)
