@@ -149,7 +149,7 @@ sync with [README.md](README.md) and [CHECKS.md](CHECKS.md).
   `CONTRIBUTING.md`; AI-assisted contributions are welcome with honest verification.
 - `.github/workflows/ci.yml` checks pushes/PRs on native Linux, Windows and both Mac
   architectures. `build.yml` builds on manual dispatch and initial-review branches
-  `codex/native-builds-*`. Use read-only permissions, pinned official actions and
+  `ci/native-builds-*`. Use read-only permissions, pinned official actions and
   no secrets, profile data, automatic tags or release publication.
 - `build_desktop.py` builds natively on Linux x64 / macOS arm64 or x64. Copy Chromium,
   docs, screenshots and licenses; run the packaged `--portable-self-check` before
@@ -161,3 +161,11 @@ sync with [README.md](README.md) and [CHECKS.md](CHECKS.md).
   Full local builds also run the packaged portable check before ZIP creation;
   use the shipped full Chromium channel, never assume a separate headless shell.
   GitHub's Windows Server runner is not a Windows 11 desktop validation.
+- POSIX packaging: pin PySide6 to the selected Nuitka-compatible version. Verify
+  the staged xcb plugin and configure relative Qt plugin paths in qt.conf/qt6.conf.
+  Before macOS signing relocate non-Mach-O data from Contents/MacOS to Resources,
+  retaining relative compatibility links; do not move binaries or follow existing
+  links. Reject collisions and paths outside the bundle. Keep strict signature
+  verification and packaged smoke checks mandatory; do not bypass failures.
+- Artifact names include platform, architecture and release version, without a run
+  ID suffix. Save dependency, resource-relocation and smoke logs on failed CI jobs.

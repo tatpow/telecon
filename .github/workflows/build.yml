@@ -2,7 +2,7 @@ name: Native builds
 
 on:
   push:
-    branches: ['codex/native-builds-*']
+    branches: ['ci/native-builds-*']
   workflow_dispatch:
     inputs:
       version:
@@ -91,7 +91,7 @@ jobs:
       - name: Upload checked archives
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: Telecon-${{ matrix.platform }}-${{ matrix.arch }}-${{ env.RELEASE_VERSION }}-${{ github.run_id }}
+          name: Telecon-${{ matrix.platform }}-${{ matrix.arch }}-${{ env.RELEASE_VERSION }}
           path: |
             dist/*.zip
             dist/*.tar.gz
@@ -102,10 +102,13 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: diagnostics-${{ matrix.platform }}-${{ matrix.arch }}-${{ github.run_id }}
+          name: diagnostics-${{ matrix.platform }}-${{ matrix.arch }}
           path: |
             build/**/compilation-report.xml
             build/**/build-command.json
+            build/**/build-dependencies.json
+            build/**/resource-relocations.json
+            build/**/packaged-smoke.log
             build/**/packaged-*-check.json
             dist/**/SELF-CHECK.json
           if-no-files-found: ignore

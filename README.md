@@ -88,6 +88,8 @@
 [Actions → Native builds](https://github.com/tatpow/telecon/actions/workflows/build.yml).
 Они хранятся 3 дня. Опубликованные архивы находятся в
 [Releases](https://github.com/tatpow/telecon/releases).
+Чтобы скачать результат сборки, откройте общую страницу успешного запуска и
+раздел **Artifacts**. В скачанном ZIP лежит архив приложения для выбранной ОС.
 
 [Сборка из исходников: Linux → Windows 11 → macOS](BUILDING.md).
 

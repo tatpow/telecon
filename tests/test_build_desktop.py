@@ -3,10 +3,81 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from build_desktop import bundle_executable, compilation_command, target_name
+from build_desktop import (bundle_executable, compilation_command, target_name,
+                           relocate_macos_data, configure_linux_qt)
 
 
 class NativeBuildTests(unittest.TestCase):
+    def test_linux_qt_configuration_uses_the_packaged_plugins(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            release = Path(temporary)
+            with self.assertRaises(FileNotFoundError):
+                configure_linux_qt(release)
+            plugin = release / "PySide6" / "qt-plugins" / "platforms" / "libqxcb.so"
+            plugin.parent.mkdir(parents=True)
+            plugin.write_bytes(b"ELF fixture")
+            configure_linux_qt(release)
+            self.assertIn("Plugins = PySide6/qt-plugins", (release / "qt6.conf").read_text())
+            self.assertEqual((release / "qt.conf").read_bytes(), (release / "qt6.conf").read_bytes())
+
+    def test_macos_data_moves_but_binary_locations_and_resource_lookups_survive(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            app = Path(temporary) / "Telecon.app"
+            code = app / "Contents" / "MacOS"
+            ui = code / "ui" / "index.html"
+            ui.parent.mkdir(parents=True)
+            ui.write_text("<html>fixture</html>")
+            binary = code / "Telecon"
+            binary.write_bytes(b"\xcf\xfa\xed\xfe" + b"native fixture")
+            extension = code / "package" / "extension.so"
+            extension.parent.mkdir()
+            extension.write_bytes(b"\xfe\xed\xfa\xcf" + b"extension fixture")
+            data = extension.parent / "settings.json"
+            data.write_text('{"fixture":true}')
+            # A package whose executable is a link must stay at its code location.
+            helper_dir = code / "helper"
+            helper_dir.mkdir()
+            (helper_dir / "engine").symlink_to(Path("..") / "Telecon")
+            moved = relocate_macos_data(app)
+            self.assertIn("ui", moved)
+            self.assertIn("package/settings.json", moved)
+            self.assertFalse(binary.is_symlink())
+            self.assertFalse(extension.is_symlink())
+            self.assertFalse(helper_dir.is_symlink())
+            self.assertTrue(ui.parent.is_symlink())
+            self.assertEqual(ui.read_text(), "<html>fixture</html>")
+            self.assertEqual(data.read_text(), '{"fixture":true}')
+            self.assertTrue((app / "Contents" / "Resources" / "ui" / "index.html").is_file())
+            self.assertEqual(relocate_macos_data(app), [])
+
+    def test_macos_relocation_refuses_to_overwrite_existing_resources(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            app = Path(temporary) / "Telecon.app"
+            code = app / "Contents" / "MacOS"
+            resources = app / "Contents" / "Resources"
+            code.mkdir(parents=True)
+            resources.mkdir()
+            (code / "file.txt").write_text("new")
+            (resources / "file.txt").write_text("original")
+            with self.assertRaises(FileExistsError):
+                relocate_macos_data(app)
+            self.assertEqual((resources / "file.txt").read_text(), "original")
+
+    def test_macos_relocation_rejects_resources_outside_the_bundle(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            app = root / "Telecon.app"
+            code = app / "Contents" / "MacOS"
+            code.mkdir(parents=True)
+            outside = root / "outside"
+            outside.mkdir()
+            (app / "Contents" / "Resources").symlink_to(outside, target_is_directory=True)
+            (code / "file.txt").write_text("original")
+            with self.assertRaises(ValueError):
+                relocate_macos_data(app)
+            self.assertEqual((code / "file.txt").read_text(), "original")
+            self.assertEqual(list(outside.iterdir()), [])
+
     def test_supported_native_architectures_and_rejection_of_cross_builds(self):
         self.assertEqual(target_name("darwin", "arm64"), ("macOS", "arm64"))
         self.assertEqual(target_name("darwin", "x86_64"), ("macOS", "x64"))

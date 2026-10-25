@@ -4,7 +4,9 @@ playwright==1.63.0
 imageio-ffmpeg==0.6.0
 psutil==7.2.2
 Nuitka==2.8.10
-PySide6>=6.9,<7; sys_platform == 'linux'
+PySide6==6.9.3; sys_platform == 'linux'
+# PySide6 pins matching Essentials/Addons/shiboken6 wheels. Newer unbounded Qt
+# releases can change module initialization beyond Nuitka 2.8's support.
 QtPy>=2.4,<3; sys_platform == 'linux'
 # Cocoa/WebKit/Quartz are installed by pywebview on macOS.
 # Transitive platform dependencies are recorded in BUILD-INFO.json, not fully locked here.

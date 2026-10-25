@@ -62,6 +62,68 @@ def bundle_executable(app: Path) -> Path:
     return executable
 
 
+def _is_macho(path: Path) -> bool:
+    with path.open("rb") as source:
+        return source.read(4) in {
+            b"\xfe\xed\xfa\xce", b"\xce\xfa\xed\xfe", b"\xfe\xed\xfa\xcf", b"\xcf\xfa\xed\xfe",
+            b"\xca\xfe\xba\xbe", b"\xbe\xba\xfe\xca", b"\xca\xfe\xba\xbf", b"\xbf\xba\xfe\xca"}
+
+
+def relocate_macos_data(app: Path) -> list[str]:
+    """Keep Mach-O code in place; relocate data before sealing the outer app.
+
+    Relative compatibility links preserve package resource lookups. Apple TN2206
+    explicitly supports these links when data originally occupied code locations.
+    Never follow or overwrite existing links, or move anything outside this app.
+    """
+    bundle = app.resolve(strict=True)
+    code = bundle / "Contents" / "MacOS"
+    resources = bundle / "Contents" / "Resources"
+    resources.mkdir(exist_ok=True)
+    if not code.resolve().is_relative_to(bundle) or not resources.resolve().is_relative_to(bundle):
+        raise ValueError("Bundle code/resources must stay inside the application")
+    moved = []
+
+    def visit(source: Path):
+        if source.is_symlink():
+            return
+        if source.is_dir():
+            # Move data-only trees together, preserving package-relative paths.
+            contains_code = any(p.is_file() and _is_macho(p)
+                                for p in source.rglob("*"))
+            if contains_code:
+                for child in sorted(source.iterdir()):
+                    visit(child)
+                return
+        elif not source.is_file() or _is_macho(source):
+            return
+        relative = source.relative_to(code)
+        destination = resources / relative
+        if not source.resolve().is_relative_to(code.resolve()) or not destination.parent.resolve().is_relative_to(bundle):
+            raise ValueError("Resource relocation escaped the application")
+        if destination.exists() or destination.is_symlink():
+            raise FileExistsError(destination)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        source.rename(destination)
+        source.symlink_to(os.path.relpath(destination, source.parent), target_is_directory=destination.is_dir())
+        moved.append(relative.as_posix())
+
+    for child in sorted(code.iterdir()):
+        visit(child)
+    return moved
+
+
+def configure_linux_qt(release: Path) -> None:
+    plugins = release / "PySide6" / "qt-plugins"
+    if not (plugins / "platforms" / "libqxcb.so").is_file():
+        raise FileNotFoundError(f"Packaged Qt xcb platform plugin missing: {plugins}")
+    # Nuitka's generated file contains Prefix only. Supply an explicit fallback
+    # plugin location as well, rather than searching the builder's system Qt.
+    configuration = "[Paths]\nPrefix = .\nPlugins = PySide6/qt-plugins\n"
+    for name in ("qt.conf", "qt6.conf"):
+        (release / name).write_text(configuration, encoding="utf-8")
+
+
 def copy_documentation(release: Path) -> None:
     for name in DOCUMENTS:
         shutil.copy2(ROOT / name, release / name)
@@ -108,6 +170,9 @@ def main() -> None:
     if not browsers.is_absolute() or not any(browsers.glob("chromium-*")):
         raise SystemExit("Set PLAYWRIGHT_BROWSERS_PATH to an absolute Chromium cache; run python -m playwright install chromium.")
     output.mkdir(parents=True, exist_ok=True)
+    (output / "build-dependencies.json").write_text(json.dumps({
+        "python": sys.version, "platform": platform.platform(),
+        "packages": {d.metadata["Name"]: d.version for d in importlib.metadata.distributions()}}, indent=2), encoding="utf-8")
     command = compilation_command(sys.platform, args.version, output)
     (output / "build-command.json").write_text(json.dumps(command, indent=2), encoding="utf-8")
     subprocess.run(command, cwd=ROOT, check=True)
@@ -121,12 +186,15 @@ def main() -> None:
         shutil.copytree(apps[0], app, symlinks=True)
         browser_destination = app / "Contents" / "Resources" / "ms-playwright"
         executable = bundle_executable(app)
+        moved = relocate_macos_data(app)
+        (output / "resource-relocations.json").write_text(json.dumps(moved, indent=2), encoding="utf-8")
     else:
         shutil.copytree(output / "app.dist", release, symlinks=True)
         browser_destination = release / "ms-playwright"
         executable = release / "Telecon"
         if not executable.is_file():
             raise SystemExit(f"Compiled executable missing: {executable}")
+        configure_linux_qt(release)
     shutil.copytree(browsers, browser_destination, symlinks=True,
                     ignore=shutil.ignore_patterns(".links", "__pycache__"))
     copy_documentation(release)
@@ -140,8 +208,19 @@ def main() -> None:
     environment = dict(os.environ)
     # Require the staged browser, rather than accidentally testing the builder's cache.
     environment["PLAYWRIGHT_BROWSERS_PATH"] = str(browser_destination)
-    subprocess.run([str(executable), "--portable-self-check", str(report_path)], cwd=release,
-                   env=environment, timeout=150, check=True)
+    smoke_log = output / "packaged-smoke.log"
+    try:
+        with smoke_log.open("w", encoding="utf-8") as console:
+            result = subprocess.run([str(executable), "--portable-self-check", str(report_path)], cwd=release,
+                                    env=environment, timeout=150, stdout=console, stderr=subprocess.STDOUT)
+    except subprocess.TimeoutExpired:
+        print(smoke_log.read_text(encoding="utf-8", errors="replace"), flush=True)
+        raise
+    if result.returncode:
+        print(smoke_log.read_text(encoding="utf-8", errors="replace"), flush=True)
+        if report_path.is_file():
+            print(report_path.read_text(encoding="utf-8"), flush=True)
+        raise SystemExit(f"Packaged smoke check failed ({result.returncode}); no archive created: {smoke_log}")
     report = json.loads(report_path.read_text(encoding="utf-8"))
     if report.get("ok") is not True or report.get("mode") != "portable":
         raise SystemExit("Packaged native UI/browser smoke check failed; no archive created.")
