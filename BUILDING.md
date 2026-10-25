@@ -182,6 +182,14 @@ Chromium находится внутри `Telecon.app/Contents/Resources/ms-play
 в `Contents/Resources`; относительные ссылки сохраняют пути, используемые
 пакетами. Mach-O бинарники остаются на месте. Такой способ размещения данных
 описан в [Apple TN2206](https://developer.apple.com/library/archive/technotes/tn2206/).
+До подписи в Info.plist также добавляется точечное ATS-исключение для HTTP
+на `127.0.0.1`: этот адрес использует локальный сервер интерфейса pywebview.
+Исключение применяется ко всем его локальным портам; защита остальных адресов
+сохраняется. Поддержка IP-исключений описана в
+[NSExceptionDomains](https://developer.apple.com/documentation/bundleresources/information-property-list/nsapptransportsecurity/nsexceptiondomains).
+Smoke-check показывает окно на macOS, проверяет HTTP-ответ интерфейса и затем
+настоящий Python/JS bridge. При сбое сохраняются HTTP-результат, стадии жизни окна
+и применённая политика из Info.plist (`macos-app-info.json`).
 
 Результат:
 `Telecon-macOS-arm64-v0.4.1.zip` либо

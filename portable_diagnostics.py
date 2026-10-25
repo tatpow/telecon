@@ -5,8 +5,28 @@ import json
 import sys
 import tempfile
 import threading
+from urllib.parse import urlsplit
+from http.client import HTTPConnection
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+
+
+def probe_ui_http(url: str) -> dict:
+    """Read only the local UI page; never contact a remote or proxied origin."""
+    target = urlsplit(url)
+    if target.scheme != "http" or target.hostname != "127.0.0.1" or target.username or target.password:
+        raise ValueError("Native smoke-check requires a loopback HTTP UI URL")
+    connection = HTTPConnection(target.hostname, target.port or 80, timeout=5)
+    try:
+        path = (target.path or "/") + ("?" + target.query if target.query else "")
+        connection.request("GET", path)
+        response = connection.getresponse()
+        content = response.read(1024 * 1024).decode("utf-8")
+        if response.status != 200 or '<html lang="ru">' not in content or 'src="app.js"' not in content:
+            raise RuntimeError("Local server did not return the bundled UI document")
+        return {"status": response.status, "content_type": response.headers.get_content_type()}
+    finally:
+        connection.close()
 
 
 def run_portable_check(report_path: Path) -> int:
@@ -63,12 +83,13 @@ def run_portable_check(report_path: Path) -> int:
                 raise RuntimeError(f"Native UI assets missing: {assets}")
             called.clear()
             window = webview.create_window("Телекон — проверка интерфейса", str(ui_path),
-                                           js_api=api, width=1024, height=760, hidden=True,
+                                           js_api=api, width=1024, height=760, hidden=sys.platform != "darwin",
                                            background_color="#E6F1FA", text_select=True)
             api._alerts.backend.window = window
 
             def check_bridge():
                 try:
+                    report["native_ui_http"] = probe_ui_http(window.real_url)
                     assert called.wait(35), "Native UI did not call the Python bridge"
                     assert window.evaluate_js("typeof motion.open === 'function'")
                     assert window.evaluate_js("document.querySelectorAll('[role=tab]').length") == 3
@@ -82,6 +103,11 @@ def run_portable_check(report_path: Path) -> int:
                     # call, which could itself block when bridge setup failed.
                     report["native_ui_diagnostics"] = {
                         "assets": assets,
+                        "url": window.real_url,
+                        "visible_window": not window.hidden,
+                        "initialized": window.events.initialized.is_set(),
+                        "before_show": window.events.before_show.is_set(),
+                        "shown": window.events.shown.is_set(),
                         "before_load": window.events.before_load.is_set(),
                         "bridge_injected": window.events._pywebviewready.is_set(),
                         "loaded": window.events.loaded.is_set(),

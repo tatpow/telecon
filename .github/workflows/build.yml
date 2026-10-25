@@ -108,6 +108,7 @@ jobs:
             build/**/build-command.json
             build/**/build-dependencies.json
             build/**/resource-relocations.json
+            build/**/macos-app-info.json
             build/**/packaged-smoke.log
             build/**/packaged-*-check.json
             dist/**/SELF-CHECK.json

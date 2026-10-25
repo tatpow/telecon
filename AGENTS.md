@@ -183,3 +183,10 @@ below are reference documentation, not a requirement to execute them every turn.
   Native smoke windows use `text_select=True`, like the real app, to avoid the
   library injecting its default inline disable-selection style. Keep the browser
   CSP regression: DevTools evaluation alone does not exercise page-script CSP.
+- macOS .app Info.plist must allow pywebview's loopback HTTP UI using an ATS
+  exception for 127.0.0.1, configured before signing. Do not disable ATS globally
+  or for arbitrary web content. macOS 14+ applies ATS to IP-address origins.
+  Native smoke checks show the macOS window like normal startup and independently
+  verify the local HTTP document. A before_load=false timeout precedes bridge
+  injection; inspect transport/navigation and lifecycle rather than changing CSP
+  again. Keep all four real checks mandatory.
