@@ -6,6 +6,7 @@ import unittest
 from datetime import datetime, timedelta
 from pathlib import Path
 from unittest.mock import Mock, patch
+from urllib.parse import urlsplit
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -47,6 +48,42 @@ class BrowserRegressionTests(unittest.TestCase):
 
     def tearDown(self):
         self.assertEqual(self.errors, [])
+
+    def test_csp_allows_bridge_functions_but_blocks_inline_scripts_and_styles(self):
+        # Ordinary page scripts enforce CSP, unlike DevTools page.evaluate.
+        # Serve the real UI under a routed local origin without opening a server.
+        probe = """
+        window.bridgeProbe = {};
+        try { window.bridgeProbe.dynamic = new Function('return 42')(); }
+        catch (error) { window.bridgeProbe.error = String(error); }
+        const style = document.createElement('style');
+        style.textContent = '#bridge-style-probe { width: 37px; }';
+        document.head.append(style);
+        const box = document.createElement('div');
+        box.id = 'bridge-style-probe'; document.body.append(box);
+        window.bridgeProbe.width = getComputedStyle(box).width;
+        const script = document.createElement('script');
+        script.textContent = 'window.inlineScriptExecuted = true';
+        document.head.append(script);
+        """
+        def serve(route):
+            path = urlsplit(route.request.url).path.lstrip("/") or "index.html"
+            if path == "bridge-csp-probe.js":
+                route.fulfill(content_type="application/javascript", body=probe)
+            elif path in {"index.html", "app.js", "motion.js", "styles.css"}:
+                content_type = {".html": "text/html", ".js": "application/javascript", ".css": "text/css"}[Path(path).suffix]
+                body = (ROOT / "ui" / path).read_text(encoding="utf-8")
+                if path == "index.html":
+                    body = body.replace("</body>", '<script src="bridge-csp-probe.js"></script></body>')
+                route.fulfill(content_type=content_type, body=body)
+            else:
+                route.fulfill(status=404, body="not found")
+        self.page.route("http://127.0.0.1:43123/**", serve)
+        self.page.goto("http://127.0.0.1:43123/")
+        result = self.page.evaluate("window.bridgeProbe")
+        self.assertEqual(result.get("dynamic"), 42, result)
+        self.assertNotEqual(result["width"], "37px")
+        self.assertFalse(self.page.evaluate("Boolean(window.inlineScriptExecuted)"))
 
     def test_reduced_motion_includes_new_dialog_backdrops(self):
         page = self.page

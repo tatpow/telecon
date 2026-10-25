@@ -177,3 +177,9 @@ below are reference documentation, not a requirement to execute them every turn.
   verification and packaged smoke checks mandatory; do not bypass failures.
 - Artifact names include platform, architecture and release version, without a run
   ID suffix. Save dependency, resource-relocation and smoke logs on failed CI jobs.
+- pywebview's API generator uses `new Function`, and `evaluate_js` uses eval.
+  The local UI CSP must allow `script-src 'self' 'unsafe-eval'` while continuing
+  to block inline scripts/styles, remote scripts, objects and form submission.
+  Native smoke windows use `text_select=True`, like the real app, to avoid the
+  library injecting its default inline disable-selection style. Keep the browser
+  CSP regression: DevTools evaluation alone does not exercise page-script CSP.

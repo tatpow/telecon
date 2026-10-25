@@ -56,10 +56,15 @@ def run_portable_check(report_path: Path) -> int:
 
             import webview
             from app import ui_file
+            ui_path = ui_file()
+            assets = {name: (ui_path.parent / name).is_file()
+                      for name in ("index.html", "styles.css", "motion.js", "app.js")}
+            if not all(assets.values()):
+                raise RuntimeError(f"Native UI assets missing: {assets}")
             called.clear()
-            window = webview.create_window("Телекон — проверка интерфейса", str(ui_file()),
+            window = webview.create_window("Телекон — проверка интерфейса", str(ui_path),
                                            js_api=api, width=1024, height=760, hidden=True,
-                                           background_color="#E6F1FA")
+                                           background_color="#E6F1FA", text_select=True)
             api._alerts.backend.window = window
 
             def check_bridge():
@@ -73,6 +78,14 @@ def run_portable_check(report_path: Path) -> int:
                 except Exception as error:
                     report["checks"]["native_ui_js_bridge"] = False
                     report["errors"].append(str(error))
+                    # Read Python-side events without making another JS bridge
+                    # call, which could itself block when bridge setup failed.
+                    report["native_ui_diagnostics"] = {
+                        "assets": assets,
+                        "before_load": window.events.before_load.is_set(),
+                        "bridge_injected": window.events._pywebviewready.is_set(),
+                        "loaded": window.events.loaded.is_set(),
+                    }
                 finally:
                     window.destroy()
 
