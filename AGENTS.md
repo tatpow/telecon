@@ -116,6 +116,13 @@ verify the target platform's build before claiming a distributable was built.
 Use [BUILDING.md](BUILDING.md) as the canonical command reference and keep it in
 sync with [README.md](README.md) and [CHECKS.md](CHECKS.md).
 
+The maintainer runs release builds through GitHub Actions. Do not compile EXEs,
+create distribution archives, run local packaging scripts, or trigger CI builds
+unless the user explicitly requests that action in the current task. Preparing
+source/workflow changes, running relevant tests and static checks, and updating
+release/commit descriptions do not require a release build. Platform commands
+below are reference documentation, not a requirement to execute them every turn.
+
 - Windows x64: build on Windows with CPython 3.12, install
   `requirements-build.lock.txt`, install Playwright Chromium, run unittest, then
   `python build_windows.py --version VERSION --no-hashsum` with a fresh release
@@ -137,7 +144,8 @@ sync with [README.md](README.md) and [CHECKS.md](CHECKS.md).
 
 ## Motion, community documentation and CI
 
-- Keep version v0.4.0b for this requested revision. Animate finite dialog/card/tab
+- Use the release version requested by the maintainer (current fix release: v0.4.1).
+  Animate finite dialog/card/tab
   transitions without replaying unchanged cards on polling. Respect reduced motion
   in JavaScript and CSS, including dialog backdrops; preserve Escape and focus return.
 - `capabilities.py` declares Windows-only recording, power and hidden-window alerts.

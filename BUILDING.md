@@ -4,7 +4,7 @@
 Пользовательский запуск описан в [README](README.md), правила разработки —
 в [CONTRIBUTING](CONTRIBUTING.md) и [AGENTS](AGENTS.md).
 
-Текущая версия — **v0.4.0b**. Сборки создаются без файлов Hashsum.
+Текущая версия — **v0.4.1**. Сборки создаются без файлов Hashsum.
 Все релизные команды используют **нативный CPython 3.12**:
 каждая ОС и архитектура собирается на соответствующем хосте.
 Для команд `node --check` отдельно нужен [Node.js](https://nodejs.org/en/download).
@@ -76,7 +76,7 @@ python -m unittest discover -s tests -v
 node --check ui/app.js
 node --check ui/motion.js
 python app.py --portable-self-check build/source-smoke.json
-python build_desktop.py --version v0.4.0b --no-hashsum
+python build_desktop.py --version v0.4.1 --no-hashsum
 ```
 
 Команды smoke-check и сборки запускайте в графической сессии.
@@ -84,13 +84,13 @@ python build_desktop.py --version v0.4.0b --no-hashsum
 `python -m playwright install --with-deps chromium`, затем используйте:
 
 ```bash
-QT_API=pyside6 QTWEBENGINE_DISABLE_SANDBOX=1 QTWEBENGINE_CHROMIUM_FLAGS=--disable-gpu xvfb-run -a python build_desktop.py --version v0.4.0b --no-hashsum
+QT_API=pyside6 QTWEBENGINE_DISABLE_SANDBOX=1 QTWEBENGINE_CHROMIUM_FLAGS=--disable-gpu xvfb-run -a python build_desktop.py --version v0.4.1 --no-hashsum
 ```
 
 Отключение sandbox в этой команде относится только к изолированному CI/Xvfb.
 Для обычного запуска приложения эти переменные не задаются.
 
-Результат: `dist/Telecon-Linux-x64-v0.4.0b.tar.gz`.
+Результат: `dist/Telecon-Linux-x64-v0.4.1.tar.gz`.
 Распакуйте всю папку и запустите `./Telecon`.
 Нужны системные библиотеки графики/звука, соответствующие зависимостям выше;
 Python в готовом архиве отдельно не требуется. Qt/PySide6 и Chromium включены.
@@ -118,7 +118,7 @@ $env:PLAYWRIGHT_BROWSERS_PATH = Join-Path (Get-Location) 'build\playwright-brows
 .\build\builder-venv\Scripts\python.exe -m unittest discover -s tests -v
 node --check ui/app.js
 node --check ui/motion.js
-.\build\builder-venv\Scripts\python.exe build_windows.py --version v0.4.0b --no-hashsum
+.\build\builder-venv\Scripts\python.exe build_windows.py --version v0.4.1 --no-hashsum
 ```
 
 Nuitka собирает standalone EXE; FFmpeg, Chromium, runtime DLL и документация
@@ -126,7 +126,7 @@ Nuitka собирает standalone EXE; FFmpeg, Chromium, runtime DLL и док�
 он проверяет настоящий захват/звук, сворачивание, последовательные записи,
 MKV/MP4, 7/60 FPS, файлы, уведомления и подключение без записи.
 
-Результат: `dist/Telecon-Windows-x64-v0.4.0b.zip`.
+Результат: `dist/Telecon-Windows-x64-v0.4.1.zip`.
 Переносите всю папку, а не один EXE.
 `SELF-CHECK.json` и `BUILD-INFO.json` описывают именно эту сборку.
 Перед ZIP полный локальный сборщик дополнительно выполняет portable-проверку:
@@ -141,7 +141,7 @@ Hosted runner `windows-2025` — это **Windows Server 2025**, а не Windows
 CI использует явно ограниченную команду:
 
 ```powershell
-python build_windows.py --version v0.4.0b --no-hashsum --validation portable
+python build_windows.py --version v0.4.1 --no-hashsum --validation portable
 ```
 
 Она компилирует реальный Windows-пакет, проверяет календарь, запуск вложенного
@@ -171,7 +171,7 @@ python -m unittest discover -s tests -v
 node --check ui/app.js
 node --check ui/motion.js
 python app.py --portable-self-check build/source-smoke.json
-python build_desktop.py --version v0.4.0b --no-hashsum
+python build_desktop.py --version v0.4.1 --no-hashsum
 ```
 
 Nuitka использует `--macos-create-app-bundle` и Cocoa/PyObjC.
@@ -184,8 +184,8 @@ Chromium находится внутри `Telecon.app/Contents/Resources/ms-play
 описан в [Apple TN2206](https://developer.apple.com/library/archive/technotes/tn2206/).
 
 Результат:
-`Telecon-macOS-arm64-v0.4.0b.zip` либо
-`Telecon-macOS-x64-v0.4.0b.zip`.
+`Telecon-macOS-arm64-v0.4.1.zip` либо
+`Telecon-macOS-x64-v0.4.1.zip`.
 Архив создаётся через `ditto`, сохраняя структуру bundle и ссылки.
 Если любая проверка не прошла, ZIP не создаётся.
 
@@ -208,7 +208,7 @@ Developer ID, entitlements и отдельный процесс подписан
   Ни теги, ни GitHub Releases автоматически не создаются.
 
 Для запуска: **GitHub → Actions → Native builds → Run workflow**,
-выберите ветку с workflow и оставьте `v0.4.0b`.
+выберите ветку с workflow и оставьте `v0.4.1`.
 Ручной запуск доступен после того, как workflow окажется в default branch.
 Для первичной проверки до слияния сборка также запускается при push в ветку
 `ci/native-builds-*`. После исправлений запускайте workflow для нового коммита:
@@ -216,7 +216,7 @@ Developer ID, entitlements и отдельный процесс подписан
 
 В успешном запуске откройте **Artifacts** и скачайте нужную архитектуру.
 Этот раздел находится на общей странице запуска, а не в логе отдельного job.
-Имена имеют вид `Telecon-macOS-arm64-v0.4.0b`, без числового ID запуска.
+Имена имеют вид `Telecon-macOS-arm64-v0.4.1`, без числового ID запуска.
 GitHub скачивает артефакт как ZIP; внутри лежит архив приложения:
 ZIP для Windows/macOS либо TAR.GZ для Linux. Рабочие архивы создаются в
 `dist/` на runner и затем загружаются в Artifacts. В Releases они сами не попадают.

@@ -149,7 +149,7 @@ def copy_licenses(release: Path) -> dict[str, str]:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--version", default="v0.4.0b")
+    parser.add_argument("--version", default="v0.4.1")
     parser.add_argument("--output-dir", type=Path)
     parser.add_argument("--no-hashsum", action="store_true", help="Accepted for parity; POSIX builds never generate hashes.")
     args = parser.parse_args()

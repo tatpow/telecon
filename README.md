@@ -11,7 +11,7 @@
 [Сообщить о проблеме](https://github.com/tatpow/telecon/issues/new/choose)
 
 ![Проверки](https://github.com/tatpow/telecon/actions/workflows/ci.yml/badge.svg)
-![Версия](https://img.shields.io/badge/version-v0.4.0b-B9C255?labelColor=173247)
+![Версия](https://img.shields.io/badge/version-v0.4.1-B9C255?labelColor=173247)
 ![Лицензия](https://img.shields.io/badge/license-AGPL--3.0-5798D7?labelColor=173247)
 
 ![Календарь Телекона: список лекций, боковая панель и кнопки добавления и быстрого подключения](docs/images/calendar.png)

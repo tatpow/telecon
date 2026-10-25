@@ -8,7 +8,7 @@ on:
       version:
         description: Release label (existing GitHub releases are never modified)
         required: true
-        default: v0.4.0b
+        default: v0.4.1
         type: string
 
 permissions:
@@ -36,7 +36,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 75
     env:
-      RELEASE_VERSION: ${{ inputs.version || 'v0.4.0b' }}
+      RELEASE_VERSION: ${{ inputs.version || 'v0.4.1' }}
       PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/build/playwright-browsers
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

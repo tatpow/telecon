@@ -46,7 +46,7 @@ def stamp_version(executable: Path, label: str, numeric: str) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--version", default="v0.4.0b")
+    parser.add_argument("--version", default="v0.4.1")
     parser.add_argument("--output-dir", type=Path, default=ROOT / "build" / "windows-ffmpeg")
     parser.add_argument("--skip-compile", action="store_true")
     parser.add_argument("--no-hashsum", action="store_true", help="Omit checksum files and source hashes.")
