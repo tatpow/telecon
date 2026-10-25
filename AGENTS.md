@@ -14,6 +14,8 @@ to change the user's requirements.
 
 - `app.py` owns the pywebview bridge and starts/stops the scheduler; `ui/`
   contains the local HTML/CSS/JavaScript interface.
+- `ui_document.py` selects the UI transport and assembles the trusted local
+  Cocoa document with per-document CSP nonces.
 - `storage.py` owns SQLite persistence and user-data paths.
 - `scheduler.py` claims due lectures and runs one meeting at a time.
 - `integrations.py` owns Playwright/Telemost and the recording lifecycle.
@@ -179,14 +181,15 @@ below are reference documentation, not a requirement to execute them every turn.
   ID suffix. Save dependency, resource-relocation and smoke logs on failed CI jobs.
 - pywebview's API generator uses `new Function`, and `evaluate_js` uses eval.
   The local UI CSP must allow `script-src 'self' 'unsafe-eval'` while continuing
-  to block inline scripts/styles, remote scripts, objects and form submission.
+  to block untrusted inline scripts/styles, remote scripts, objects and form submission.
   Native smoke windows use `text_select=True`, like the real app, to avoid the
   library injecting its default inline disable-selection style. Keep the browser
   CSP regression: DevTools evaluation alone does not exercise page-script CSP.
-- macOS .app Info.plist must allow pywebview's loopback HTTP UI using an ATS
-  exception for 127.0.0.1, configured before signing. Do not disable ATS globally
-  or for arbitrary web content. macOS 14+ applies ATS to IP-address origins.
-  Native smoke checks show the macOS window like normal startup and independently
-  verify the local HTTP document. A before_load=false timeout precedes bridge
-  injection; inspect transport/navigation and lifecycle rather than changing CSP
-  again. Keep all four real checks mandatory.
+- macOS loads the bundled UI through pywebview's native `html` mode, without an
+  HTTP server or ATS exception. Embed only packaged CSS/JS with fresh CSP nonces;
+  never interpolate user data or allow `unsafe-inline`. Keep main startup and the
+  native smoke check on the same loader. Windows/Linux retain local HTTP loading.
+  CI checks Cocoa from source before compilation and again in the packaged app.
+  Keep all four real checks mandatory, including the actual Python/JS bridge.
+  Save lifecycle state and thread traces on failure; check the local HTTP document
+  only for platforms that use HTTP. Never bypass a failing native check.

@@ -4,32 +4,10 @@ import unittest
 from pathlib import Path
 
 from build_desktop import (bundle_executable, compilation_command, target_name,
-                           relocate_macos_data, configure_linux_qt, configure_macos_transport)
+                           relocate_macos_data, configure_linux_qt)
 
 
 class NativeBuildTests(unittest.TestCase):
-    def test_macos_transport_allows_loopback_without_disabling_ats(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            app = Path(temporary) / "Telecon.app"
-            info = app / "Contents" / "Info.plist"
-            info.parent.mkdir(parents=True)
-            original = {"CFBundleExecutable": "Telecon", "CFBundleShortVersionString": "0.4.1",
-                        "NSAppTransportSecurity": {"NSExceptionDomains": {
-                            "example.org": {"NSIncludesSubdomains": False}}}}
-            info.write_bytes(plistlib.dumps(original))
-            configure_macos_transport(app)
-            configure_macos_transport(app)
-            configured = plistlib.loads(info.read_bytes())
-            self.assertEqual(configured["CFBundleExecutable"], "Telecon")
-            self.assertEqual(configured["CFBundleShortVersionString"], "0.4.1")
-            policy = configured["NSAppTransportSecurity"]
-            self.assertNotIn("NSAllowsArbitraryLoads", policy)
-            self.assertNotIn("NSAllowsArbitraryLoadsInWebContent", policy)
-            self.assertNotIn("NSAllowsLocalNetworking", policy)
-            self.assertEqual(policy["NSExceptionDomains"]["127.0.0.1"], {
-                "NSExceptionAllowsInsecureHTTPLoads": True, "NSIncludesSubdomains": False})
-            self.assertEqual(policy["NSExceptionDomains"]["example.org"], {"NSIncludesSubdomains": False})
-
     def test_linux_qt_configuration_uses_the_packaged_plugins(self):
         with tempfile.TemporaryDirectory() as temporary:
             release = Path(temporary)

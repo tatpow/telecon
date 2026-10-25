@@ -514,17 +514,19 @@ def ui_file() -> Path:
 
 def main() -> None:
     import webview
+    from ui_document import ui_window_content
 
     ui = ui_file()
+    content, http_server = ui_window_content(ui)
     with _InstanceLock(user_data_dir() / "desktop.lock"):
         api = DesktopApi()
-        window = webview.create_window("Телекон — календарь лекций", str(ui), js_api=api,
+        window = webview.create_window("Телекон — календарь лекций", **content, js_api=api,
                                        width=1220, height=820, min_size=(820, 600),
                                        background_color="#E6F1FA", text_select=True)
         window.events.closing += lambda: api._request_close(window)
         api._alerts.backend.window = window
         window.events.closed += api._alerts.close
-        webview.start(http_server=True, private_mode=True)
+        webview.start(http_server=http_server, private_mode=True)
 
 
 if __name__ == "__main__":

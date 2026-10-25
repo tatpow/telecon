@@ -74,6 +74,9 @@ jobs:
           if ($installation.ExitCode -notin @(0, 3010)) { throw "WebView2 installer failed: $($installation.ExitCode)" }
       - name: Unit tests before packaging
         run: python -m unittest discover -s tests -v
+      - name: Check native Cocoa UI from source before compilation
+        if: runner.os == 'macOS'
+        run: python app.py --portable-self-check build/source-macos-smoke.json
       - name: Build Linux folder and test native Qt UI
         if: runner.os == 'Linux'
         env:
@@ -110,6 +113,9 @@ jobs:
             build/**/resource-relocations.json
             build/**/macos-app-info.json
             build/**/packaged-smoke.log
+            build/source-macos-smoke.json
+            build/*.threads.log
+            dist/**/*.threads.log
             build/**/packaged-*-check.json
             dist/**/SELF-CHECK.json
           if-no-files-found: ignore

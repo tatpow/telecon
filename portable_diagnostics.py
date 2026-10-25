@@ -5,6 +5,7 @@ import json
 import sys
 import tempfile
 import threading
+import faulthandler
 from urllib.parse import urlsplit
 from http.client import HTTPConnection
 from datetime import datetime, timedelta, timezone
@@ -76,20 +77,24 @@ def run_portable_check(report_path: Path) -> int:
 
             import webview
             from app import ui_file
+            from ui_document import ui_window_content
             ui_path = ui_file()
             assets = {name: (ui_path.parent / name).is_file()
                       for name in ("index.html", "styles.css", "motion.js", "app.js")}
             if not all(assets.values()):
                 raise RuntimeError(f"Native UI assets missing: {assets}")
+            content, http_server = ui_window_content(ui_path)
+            report["native_ui_mode"] = "http" if http_server else "inline"
             called.clear()
-            window = webview.create_window("Телекон — проверка интерфейса", str(ui_path),
+            window = webview.create_window("Телекон — проверка интерфейса", **content,
                                            js_api=api, width=1024, height=760, hidden=sys.platform != "darwin",
                                            background_color="#E6F1FA", text_select=True)
             api._alerts.backend.window = window
 
             def check_bridge():
                 try:
-                    report["native_ui_http"] = probe_ui_http(window.real_url)
+                    if http_server:
+                        report["native_ui_http"] = probe_ui_http(window.real_url)
                     assert called.wait(35), "Native UI did not call the Python bridge"
                     assert window.evaluate_js("typeof motion.open === 'function'")
                     assert window.evaluate_js("document.querySelectorAll('[role=tab]').length") == 3
@@ -112,12 +117,18 @@ def run_portable_check(report_path: Path) -> int:
                         "bridge_injected": window.events._pywebviewready.is_set(),
                         "loaded": window.events.loaded.is_set(),
                     }
+                    try:
+                        report_path.parent.mkdir(parents=True, exist_ok=True)
+                        with report_path.with_suffix(".threads.log").open("w", encoding="utf-8") as trace:
+                            faulthandler.dump_traceback(file=trace, all_threads=True)
+                    except Exception as diagnostic_error:
+                        report["diagnostic_error"] = str(diagnostic_error)
                 finally:
                     window.destroy()
 
             try:
                 webview.start(check_bridge, gui="qt" if sys.platform == "linux" else None,
-                              http_server=True, private_mode=True)
+                              http_server=http_server, private_mode=True)
             finally:
                 api._alerts.close()
                 api._sleep.close()

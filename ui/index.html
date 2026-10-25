@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <!-- pywebview creates bridge methods with new Function and uses eval for
-       evaluate_js. Keep inline scripts/styles and non-local script sources blocked. -->
+       evaluate_js. Keep untrusted inline scripts/styles and non-local scripts blocked. -->
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self'; script-src 'self' 'unsafe-eval'; img-src 'self' data:; object-src 'none'; base-uri 'none'; form-action 'none'">
   <title>Телекон · Моё расписание</title>
   <link rel="stylesheet" href="styles.css">

@@ -176,7 +176,7 @@ def main() -> None:
 
     source_files = ["app.py", "diagnostics.py", "integrations.py", "storage.py", "scheduler.py",
                     "recording.py", "recording_names.py", "video_settings.py", "power.py", "notifications.py",
-                    "capabilities.py", "portable_diagnostics.py", "ui/index.html", "ui/app.js", "ui/motion.js", "ui/styles.css"]
+                    "capabilities.py", "portable_diagnostics.py", "ui_document.py", "ui/index.html", "ui/app.js", "ui/motion.js", "ui/styles.css"]
     manifest = {
         "version": args.version, "windows_version": numeric_version,
         "validation": args.validation, "recording_checked": args.validation == "full",

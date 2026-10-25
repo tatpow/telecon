@@ -62,24 +62,6 @@ def bundle_executable(app: Path) -> Path:
     return executable
 
 
-def configure_macos_transport(app: Path) -> None:
-    """Allow only the loopback HTTP origin used by pywebview's local server.
-
-    macOS 14+ applies ATS to IP-address URLs. Do not disable ATS globally or
-    permit arbitrary HTTP web content merely to load the bundled interface.
-    This must run before the outer app is signed.
-    """
-    info_path = app / "Contents" / "Info.plist"
-    with info_path.open("rb") as source:
-        info = plistlib.load(source)
-    transport = info.setdefault("NSAppTransportSecurity", {})
-    domains = transport.setdefault("NSExceptionDomains", {})
-    loopback = domains.setdefault("127.0.0.1", {})
-    loopback["NSExceptionAllowsInsecureHTTPLoads"] = True
-    loopback["NSIncludesSubdomains"] = False
-    info_path.write_bytes(plistlib.dumps(info))
-
-
 def _is_macho(path: Path) -> bool:
     with path.open("rb") as source:
         return source.read(4) in {
@@ -204,11 +186,10 @@ def main() -> None:
         shutil.copytree(apps[0], app, symlinks=True)
         browser_destination = app / "Contents" / "Resources" / "ms-playwright"
         executable = bundle_executable(app)
-        configure_macos_transport(app)
         with (app / "Contents" / "Info.plist").open("rb") as info_source:
             app_info = plistlib.load(info_source)
         (output / "macos-app-info.json").write_text(json.dumps({
-            "identifier": app_info.get("CFBundleIdentifier"),
+            "identifier": app_info.get("CFBundleIdentifier"), "ui_load_mode": "inline",
             "version": app_info.get("CFBundleShortVersionString"),
             "transport_security": app_info.get("NSAppTransportSecurity")}, indent=2), encoding="utf-8")
         moved = relocate_macos_data(app)

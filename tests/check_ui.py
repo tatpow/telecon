@@ -15,6 +15,7 @@ from capabilities import desktop_capabilities
 from integrations import _start_playwright
 from storage import Lecture, LectureStore
 from video_settings import resolve_video_settings
+from ui_document import inline_ui_document
 
 
 class BrowserRegressionTests(unittest.TestCase):
@@ -48,6 +49,23 @@ class BrowserRegressionTests(unittest.TestCase):
 
     def tearDown(self):
         self.assertEqual(self.errors, [])
+
+    def test_cocoa_document_runs_offline_and_blocks_untrusted_inline_content(self):
+        document = inline_ui_document(ROOT / "ui" / "index.html")
+        document = document.replace("</head>", "<style>body{display:none}</style></head>")
+        document = document.replace("</body>", "<script>window.untrustedScriptRan=true</script></body>")
+        requests = []
+        self.page.on("request", lambda request: requests.append(request.resource_type))
+        self.page.route("http://127.0.0.1:43124/**", lambda route: route.fulfill(content_type="text/html", body=document))
+        self.page.goto("http://127.0.0.1:43124/")
+        self.page.wait_for_function("()=>ui.ready&&!ui.refreshing")
+        self.assertEqual(self.page.locator(".lecture-card").count(), 1)
+        self.assertTrue(self.page.locator("#page-title").is_visible())
+        self.assertFalse(self.page.evaluate("Boolean(window.untrustedScriptRan)"))
+        self.assertEqual(self.page.evaluate("typeof motion.open"), "function")
+        self.assertEqual(self.page.evaluate("getComputedStyle(document.documentElement).getPropertyValue('--frost').trim()"), "#E6F1FA")
+        self.assertNotIn("script", requests)
+        self.assertNotIn("stylesheet", requests)
 
     def test_csp_allows_bridge_functions_but_blocks_inline_scripts_and_styles(self):
         # Ordinary page scripts enforce CSP, unlike DevTools page.evaluate.
