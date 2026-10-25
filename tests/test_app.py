@@ -61,6 +61,11 @@ class FakeSleep:
 
 class DesktopApiTests(unittest.TestCase):
     def setUp(self):
+        from unittest.mock import patch
+        from capabilities import desktop_capabilities
+        capabilities = patch('app.desktop_capabilities', return_value=desktop_capabilities('win32'))
+        capabilities.start()
+        self.addCleanup(capabilities.stop)
         import tempfile
         from pathlib import Path
         from app import DesktopApi

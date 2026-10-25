@@ -55,9 +55,11 @@ def _profile_access():
 
 def configure_browser_bundle() -> None:
     """Use a Chromium bundle shipped next to a packaged executable, if present."""
-    browsers = Path(sys.executable).resolve().parent / "ms-playwright"
-    if browsers.is_dir():
-        os.environ["PLAYWRIGHT_BROWSERS_PATH"] = str(browsers)
+    executable_dir = Path(sys.executable).resolve().parent
+    for browsers in (executable_dir / "ms-playwright", executable_dir.parent / "Resources" / "ms-playwright"):
+        if browsers.is_dir():
+            os.environ["PLAYWRIGHT_BROWSERS_PATH"] = str(browsers)
+            break
 
 
 def _start_playwright():
@@ -426,15 +428,19 @@ def run_lecture(lecture: Lecture, settings: dict | None = None, *,
                 status_callback: StatusCallback | None = None,
                 visibility_callback: Callable | None = None,
                 recording_callback: Callable | None = None) -> str | None:
-    """Record only the configured meeting browser window and its process audio."""
+    """Join the configured meeting; capture only when recording is explicitly enabled."""
     _check_cancel(cancel_event)
     validate_telemost_url(lecture.url)
     if lecture.ends_at <= datetime.now(tz=lecture.ends_at.tzinfo):
         raise RuntimeError("Время окончания лекции уже прошло.")
     with _profile_access():
         config = dict(settings or {})
-        _report(status_callback, "Проверяем возможность записи…")
-        check_recorder(config)
+        recording_enabled = config.get("recording_enabled", False)
+        if type(recording_enabled) is not bool:
+            raise ValueError("Запись должна быть включена или выключена.")
+        if recording_enabled:
+            _report(status_callback, "Проверяем возможность записи…")
+            check_recorder(config)
         _check_cancel(cancel_event)
         playwright = context = recorder = None
         recording_started = False
@@ -446,19 +452,21 @@ def run_lecture(lecture: Lecture, settings: dict | None = None, *,
             _check_cancel(cancel_event)
             if lecture.ends_at <= datetime.now(tz=lecture.ends_at.tzinfo):
                 raise RuntimeError("Время лекции истекло во время подключения.")
-            target = browser_target(user_data_dir() / "browser-profile")
-            recorder = FFmpegRecorder(target, config, lecture.id, lecture=lecture)
-            recorder.start(cancel_event)
-            recording_started = True
-            if recording_callback is not None:
-                recording_callback(recorder.result())
-            _report(status_callback, f"Идёт запись: {lecture.title}")
+            if recording_enabled:
+                target = browser_target(user_data_dir() / "browser-profile")
+                recorder = FFmpegRecorder(target, config, lecture.id, lecture=lecture)
+                recorder.start(cancel_event)
+                recording_started = True
+                if recording_callback is not None:
+                    recording_callback(recorder.result())
+            _report(status_callback, f"Идёт запись: {lecture.title}" if recording_enabled else f"Вы подключены: {lecture.title}")
             while datetime.now(tz=lecture.ends_at.tzinfo) < lecture.ends_at:
                 _check_cancel(cancel_event)
                 if page.is_closed() or _first_visible(meeting, JOINED_SELECTORS) is None:
-                    raise RuntimeError("Соединение с Телемостом прервано; запись остановлена.")
-                recorder.check()
-                if visibility_callback is not None:
+                    raise RuntimeError("Соединение с Телемостом прервано.")
+                if recorder is not None:
+                    recorder.check()
+                if recorder is not None and visibility_callback is not None:
                     _report_visibility(visibility_callback, target_minimized(target), target)
                 remaining = (lecture.ends_at - datetime.now(tz=lecture.ends_at.tzinfo)).total_seconds()
                 _wait(cancel_event, min(.5, max(0, remaining)))

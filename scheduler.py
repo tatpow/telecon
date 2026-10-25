@@ -180,7 +180,7 @@ class LectureScheduler:
                 elif cancelled:
                     self._notify(f"Остановлена: {lecture.title}")
                 else:
-                    self._notify(f"Запись завершена: {lecture.title}")
+                    self._notify(f"Запись завершена: {lecture.title}" if recording else f"Подключение завершено: {lecture.title}")
                 with self._active_lock:
                     self._active = False
                     self._active_lecture_id = None

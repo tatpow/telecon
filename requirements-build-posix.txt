@@ -1,0 +1,10 @@
+# Native Linux/macOS builds. Core tools match the tested Windows toolchain.
+pywebview==6.2.1
+playwright==1.63.0
+imageio-ffmpeg==0.6.0
+psutil==7.2.2
+Nuitka==2.8.10
+PySide6>=6.9,<7; sys_platform == 'linux'
+QtPy>=2.4,<3; sys_platform == 'linux'
+# Cocoa/WebKit/Quartz are installed by pywebview on macOS.
+# Transitive platform dependencies are recorded in BUILD-INFO.json, not fully locked here.

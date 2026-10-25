@@ -1,3 +1,4 @@
+import sys
 import io
 import struct
 import unittest
@@ -90,6 +91,7 @@ class HiddenWindowAlertsTests(unittest.TestCase):
 
 
 class NativeNotificationTests(unittest.TestCase):
+    @unittest.skipUnless(sys.platform == "win32", "Windows native backend")
     def test_balloon_never_plays_system_sound_and_is_deleted_on_restore(self):
         backend = WindowsAlerts()
         calls = []

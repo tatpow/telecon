@@ -1,3 +1,4 @@
+import sys
 import tempfile
 import threading
 import unittest
@@ -32,36 +33,36 @@ class LectureRecordingTests(unittest.TestCase):
         self.recorder.start.side_effect=lambda *_:events.append('start')
         self.recorder.stop.side_effect=lambda **_:events.append('stop') or 'C:/Videos/lecture.mkv'
         self.context.close.side_effect=lambda:events.append('close')
-        self.assertEqual(integrations.run_lecture(self.lecture),'C:/Videos/lecture.mkv')
+        self.assertEqual(integrations.run_lecture(self.lecture, settings={"recording_enabled": True}),'C:/Videos/lecture.mkv')
         self.assertEqual(events,['join','start','stop','close']);self.cleaned()
     def test_missing_ffmpeg_does_not_open_meeting(self):
         self.preflight.side_effect=RuntimeError('FFmpeg unavailable')
-        with self.assertRaisesRegex(RuntimeError,'unavailable'):integrations.run_lecture(self.lecture)
+        with self.assertRaisesRegex(RuntimeError,'unavailable'):integrations.run_lecture(self.lecture, settings={"recording_enabled": True})
         self.join.assert_not_called();self.factory.assert_not_called()
     def test_failed_join_does_not_start_recorder(self):
         self.join.side_effect=RuntimeError('join failed')
-        with self.assertRaisesRegex(RuntimeError,'join failed'):integrations.run_lecture(self.lecture)
+        with self.assertRaisesRegex(RuntimeError,'join failed'):integrations.run_lecture(self.lecture, settings={"recording_enabled": True})
         self.factory.assert_not_called()
     def test_cancellation_stops_and_preserves_cancelled_result(self):
         event=threading.Event()
         self.recorder.check.side_effect=lambda:event.set()
-        with self.assertRaises(integrations.LectureCancelled):integrations.run_lecture(self.lecture,cancel_event=event)
+        with self.assertRaises(integrations.LectureCancelled):integrations.run_lecture(self.lecture, settings={"recording_enabled": True},cancel_event=event)
         self.recorder.stop.assert_called_once();self.cleaned()
     def test_cancel_before_launch_never_checks_or_opens(self):
         event=threading.Event();event.set()
-        with self.assertRaises(integrations.LectureCancelled):integrations.run_lecture(self.lecture,cancel_event=event)
+        with self.assertRaises(integrations.LectureCancelled):integrations.run_lecture(self.lecture, settings={"recording_enabled": True},cancel_event=event)
         self.preflight.assert_not_called();self.join.assert_not_called()
     def test_cancelled_start_is_not_success(self):
         self.recorder.start.side_effect=recording.RecordingCancelled('cancel')
         statuses=[]
-        with self.assertRaises(recording.RecordingCancelled):integrations.run_lecture(self.lecture,status_callback=statuses.append)
+        with self.assertRaises(recording.RecordingCancelled):integrations.run_lecture(self.lecture, settings={"recording_enabled": True},status_callback=statuses.append)
         self.recorder.stop.assert_called_once_with(validate=False)
         self.assertFalse(any(message.startswith('Запись сохранена') for message in statuses))
         self.cleaned()
     def test_failed_save_overrides_cancelled_result(self):
         event=threading.Event();self.recorder.check.side_effect=lambda:event.set()
         self.recorder.stop.side_effect=RuntimeError('disk full')
-        with self.assertRaisesRegex(RuntimeError,'disk full'):integrations.run_lecture(self.lecture,cancel_event=event)
+        with self.assertRaisesRegex(RuntimeError,'disk full'):integrations.run_lecture(self.lecture, settings={"recording_enabled": True},cancel_event=event)
         self.cleaned()
     def test_short_cancelled_recording_publishes_discard_reason_and_cleans_up(self):
         event = threading.Event()
@@ -74,7 +75,7 @@ class LectureRecordingTests(unittest.TestCase):
         ]
         statuses, results = [], []
         with self.assertRaises(integrations.LectureCancelled):
-            integrations.run_lecture(self.lecture, cancel_event=event, status_callback=statuses.append,
+            integrations.run_lecture(self.lecture, settings={"recording_enabled": True}, cancel_event=event, status_callback=statuses.append,
                                      recording_callback=results.append)
         self.assertEqual(results[-1]['status'], 'discarded')
         self.assertIn(self.recorder.recording_note, statuses)
@@ -82,20 +83,20 @@ class LectureRecordingTests(unittest.TestCase):
         self.cleaned()
     def test_recorder_failure_is_not_reported_success(self):
         self.recorder.check.side_effect=RuntimeError('audio died');statuses=[]
-        with self.assertRaisesRegex(RuntimeError,'audio died'):integrations.run_lecture(self.lecture,status_callback=statuses.append)
+        with self.assertRaisesRegex(RuntimeError,'audio died'):integrations.run_lecture(self.lecture, settings={"recording_enabled": True},status_callback=statuses.append)
         self.recorder.stop.assert_called_once();self.cleaned()
     def test_disconnect_stops_recording(self):
         self.page.is_closed.return_value=True
-        with self.assertRaisesRegex(RuntimeError,'Соединение'):integrations.run_lecture(self.lecture)
+        with self.assertRaisesRegex(RuntimeError,'Соединение'):integrations.run_lecture(self.lecture, settings={"recording_enabled": True})
         self.recorder.stop.assert_called_once();self.cleaned()
     def test_expired_lecture_never_launches(self):
         self.now=self.lecture.ends_at
-        with self.assertRaisesRegex(RuntimeError,'уже прошло'):integrations.run_lecture(self.lecture)
+        with self.assertRaisesRegex(RuntimeError,'уже прошло'):integrations.run_lecture(self.lecture, settings={"recording_enabled": True})
         self.preflight.assert_not_called()
     def test_visibility_changes_are_reported_and_finally_cleared(self):
         callback = Mock()
         with patch.object(integrations, 'target_minimized', side_effect=[False, True, True, False]):
-            integrations.run_lecture(self.lecture, visibility_callback=callback)
+            integrations.run_lecture(self.lecture, settings={"recording_enabled": True}, visibility_callback=callback)
         self.assertEqual([call.args[0] for call in callback.call_args_list], [False, True, True, False, False])
         self.assertEqual(callback.call_args.args, (False, None))
         self.cleaned()
@@ -104,13 +105,58 @@ class LectureRecordingTests(unittest.TestCase):
         callback = Mock(side_effect=RuntimeError('alert unavailable'))
         with patch.object(integrations, 'target_minimized', return_value=True), \
                 self.assertLogs('integrations', level='ERROR'):
-            integrations.run_lecture(self.lecture, visibility_callback=callback)
+            integrations.run_lecture(self.lecture, settings={"recording_enabled": True}, visibility_callback=callback)
         self.recorder.stop.assert_called_once_with(validate=True)
         self.cleaned()
     def test_browser_cleanup_error_never_skips_playwright_cleanup(self):
         self.context.close.side_effect=RuntimeError('close failed')
-        with self.assertRaisesRegex(RuntimeError,'close failed'):integrations.run_lecture(self.lecture)
+        with self.assertRaisesRegex(RuntimeError,'close failed'):integrations.run_lecture(self.lecture, settings={"recording_enabled": True})
         self.p.stop.assert_called_once()
+
+    def test_connection_only_is_default_and_skips_all_recording_dependencies(self):
+        result = Mock()
+        statuses = []
+        self.preflight.side_effect = RuntimeError('FFmpeg not installed')
+        self.assertIsNone(integrations.run_lecture(self.lecture, status_callback=statuses.append,
+                                                  recording_callback=result))
+        self.preflight.assert_not_called()
+        self.factory.assert_not_called()
+        self.target.assert_not_called()
+        result.assert_not_called()
+        self.assertTrue(any(message.startswith('Вы подключены:') for message in statuses))
+        self.assertFalse(any('запис' in message.lower() for message in statuses))
+        self.cleaned()
+
+    def test_disabled_recording_does_not_create_capture_or_file(self):
+        callback = Mock()
+        self.assertIsNone(integrations.run_lecture(self.lecture, {'recording_enabled':False}, visibility_callback=callback))
+        self.recorder.start.assert_not_called()
+        self.recorder.stop.assert_not_called()
+        self.assertEqual(callback.call_args_list[-1].args,(False,None))
+        self.cleaned()
+
+    def test_connection_only_disconnect_is_reported_and_browser_closes(self):
+        self.page.is_closed.return_value=True
+        with self.assertRaisesRegex(RuntimeError,'Соединение'):
+            integrations.run_lecture(self.lecture, {'recording_enabled':False})
+        self.factory.assert_not_called()
+        self.cleaned()
+
+    def test_connection_only_cancellation_exits_without_saving(self):
+        event=threading.Event()
+        def stop(event, seconds):
+            event.set()
+        self.wait.side_effect=stop
+        with self.assertRaises(integrations.LectureCancelled):
+            integrations.run_lecture(self.lecture, {'recording_enabled':False},cancel_event=event)
+        self.factory.assert_not_called()
+        self.cleaned()
+
+    def test_non_boolean_recording_flag_is_rejected_before_join(self):
+        for flag in (1, 'false', None):
+            with self.subTest(flag=flag),self.assertRaises(ValueError):
+                integrations.run_lecture(self.lecture, {'recording_enabled':flag})
+        self.join.assert_not_called()
 
 class RecorderTests(unittest.TestCase):
     def setUp(self):
@@ -149,6 +195,7 @@ class RecorderTests(unittest.TestCase):
             self.recorder._video_frame = b'fresh slide'
             self.assertEqual(self.recorder._output_frame(), b'fresh slide')
 
+    @unittest.skipUnless(sys.platform == "win32", "Windows native backend")
     def test_recording_can_start_when_minimized_without_wgc_frames(self):
         capture = Mock()
         capture.start_free_threaded.return_value.is_finished.return_value = False
@@ -160,6 +207,7 @@ class RecorderTests(unittest.TestCase):
         capture.start_free_threaded.assert_called_once()
         self.assertIsNone(self.recorder._error)
 
+    @unittest.skipUnless(sys.platform == "win32", "Windows native backend")
     def test_minimized_start_still_detects_real_capture_failure(self):
         capture = Mock()
         capture.start_free_threaded.return_value.is_finished.return_value = True
@@ -201,6 +249,7 @@ class RecorderTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError,'не завершился штатно'):self.recorder.stop()
         process.terminate.assert_called_once()
 
+@unittest.skipUnless(sys.platform == "win32", "Windows native backend")
 class WindowTargetTests(unittest.TestCase):
     def setUp(self):
         self.target = recording.BrowserTarget(7, 12345)

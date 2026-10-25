@@ -1,0 +1,39 @@
+name: Сообщить о проблеме
+description: Что-то не работает или ведёт себя неожиданно
+title: '[Ошибка]: '
+body:
+  - type: markdown
+    attributes:
+      value: Спасибо за помощь! Не прикладывайте cookies, профиль браузера, базу лекций, личные ссылки или записи встреч. Скройте имена и адреса на скриншотах.
+  - type: input
+    id: version
+    attributes:
+      label: Версия Телекона
+      placeholder: v0.4.0b
+    validations:
+      required: true
+  - type: input
+    id: system
+    attributes:
+      label: Операционная система и архитектура
+      placeholder: Windows 11 x64 / macOS 15 arm64 / Ubuntu 24.04 x64
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Как повторить
+      description: Какие действия приводят к проблеме?
+    validations:
+      required: true
+  - type: textarea
+    id: result
+    attributes:
+      label: Что ожидалось и что произошло
+    validations:
+      required: true
+  - type: textarea
+    id: details
+    attributes:
+      label: Сообщение об ошибке или скриншот
+      description: Только обезличенная информация. Для проблем записи укажите формат, FPS, разрешение и качество.

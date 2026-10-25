@@ -1,0 +1,112 @@
+name: Native builds
+
+on:
+  push:
+    branches: ['codex/native-builds-*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Release label (existing GitHub releases are never modified)
+        required: true
+        default: v0.4.0b
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    name: Build · ${{ matrix.platform }} ${{ matrix.arch }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            platform: Linux
+            arch: x64
+          - os: windows-2025
+            platform: Windows
+            arch: x64
+          - os: macos-15
+            platform: macOS
+            arch: arm64
+          - os: macos-15-intel
+            platform: macOS
+            arch: x64
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 75
+    env:
+      RELEASE_VERSION: ${{ inputs.version || 'v0.4.0b' }}
+      PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/build/playwright-browsers
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: requirements*.txt
+      - name: Linux native UI and compiler dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential patchelf xvfb xauth libegl1 libopengl0 libgl1 libxcb-cursor0 libxcb-icccm4 libxcb-keysyms1 libxcb-shape0 libxcb-xinerama0 libxcb-render-util0 libxkbcommon-x11-0
+      - name: Install Windows dependencies
+        if: runner.os == 'Windows'
+        run: python -m pip install -r requirements-build.lock.txt
+      - name: Install Linux/macOS dependencies
+        if: runner.os != 'Windows'
+        run: python -m pip install -r requirements-build-posix.txt
+      - name: Install Chromium (Linux)
+        if: runner.os == 'Linux'
+        run: python -m playwright install --with-deps chromium
+      - name: Install Chromium (Windows/macOS)
+        if: runner.os != 'Linux'
+        run: python -m playwright install chromium
+      - name: Ensure WebView2 Runtime
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $installer = Join-Path $env:RUNNER_TEMP 'MicrosoftEdgeWebview2Setup.exe'
+          Invoke-WebRequest 'https://go.microsoft.com/fwlink/p/?LinkId=2124703' -OutFile $installer
+          $installation = Start-Process -FilePath $installer -ArgumentList '/silent','/install' -Wait -PassThru -WindowStyle Hidden
+          if ($installation.ExitCode -notin @(0, 3010)) { throw "WebView2 installer failed: $($installation.ExitCode)" }
+      - name: Unit tests before packaging
+        run: python -m unittest discover -s tests -v
+      - name: Build Linux folder and test native Qt UI
+        if: runner.os == 'Linux'
+        env:
+          QT_API: pyside6
+          QTWEBENGINE_DISABLE_SANDBOX: '1' # Isolated Xvfb runner only, never a user launch setting.
+          QTWEBENGINE_CHROMIUM_FLAGS: --disable-gpu
+        run: xvfb-run -a python build_desktop.py --version "$RELEASE_VERSION" --no-hashsum
+      - name: Build native macOS app and test Cocoa UI
+        if: runner.os == 'macOS'
+        run: python build_desktop.py --version "$RELEASE_VERSION" --no-hashsum
+      - name: Build Windows CI package (recording requires an interactive Windows 11 check)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: python build_windows.py --version "$RELEASE_VERSION" --no-hashsum --validation portable
+      - name: Upload checked archives
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: Telecon-${{ matrix.platform }}-${{ matrix.arch }}-${{ env.RELEASE_VERSION }}-${{ github.run_id }}
+          path: |
+            dist/*.zip
+            dist/*.tar.gz
+          if-no-files-found: error
+          retention-days: 3
+          compression-level: 0
+      - name: Upload build diagnostics
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: diagnostics-${{ matrix.platform }}-${{ matrix.arch }}-${{ github.run_id }}
+          path: |
+            build/**/compilation-report.xml
+            build/**/build-command.json
+            build/**/packaged-*-check.json
+            dist/**/SELF-CHECK.json
+          if-no-files-found: ignore
+          retention-days: 3

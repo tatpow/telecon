@@ -1,3 +1,4 @@
+import sys
 import unittest
 from datetime import datetime
 from pathlib import Path
@@ -68,6 +69,7 @@ class RecordingNamesTests(unittest.TestCase):
                 self.assertFalse(api.save_settings({"recording_name_template": value})["ok"])
 
 
+@unittest.skipUnless(sys.platform == "win32", "Windows native backend")
 class CaptureRuntimeTests(unittest.TestCase):
     def test_runtime_survives_between_workers_and_is_released_once(self):
         runtime = _CaptureRuntime()

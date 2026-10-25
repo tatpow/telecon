@@ -1,3 +1,4 @@
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -61,6 +62,10 @@ class VideoSettingsTests(unittest.TestCase):
 
 class VideoBridgeTests(unittest.TestCase):
     def setUp(self):
+        from capabilities import desktop_capabilities
+        capabilities = patch('app.desktop_capabilities', return_value=desktop_capabilities('win32'))
+        capabilities.start()
+        self.addCleanup(capabilities.stop)
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name)
@@ -99,6 +104,7 @@ class VideoBridgeTests(unittest.TestCase):
         self.assertEqual((result['screen_width'],result['screen_height'],result['max_fps']), (1920,1080,60))
 
 
+@unittest.skipUnless(sys.platform == "win32", "Windows native backend")
 class CaptureDimensionsTests(unittest.TestCase):
     def test_capture_frame_black_frame_and_interval_match_custom_settings(self):
         import numpy as np

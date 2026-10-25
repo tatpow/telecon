@@ -8,6 +8,7 @@ from typing import Callable
 from storage import ALERT_DEFAULTS, Lecture, LectureStore, TELEMOST_HOME_URL, user_data_dir, validate_telemost_url, validate_profile_url
 from power import SleepInhibitor
 from notifications import HiddenWindowAlerts
+from capabilities import desktop_capabilities
 
 
 DATE_FORMAT = "%Y-%m-%d %H:%M"
@@ -66,14 +67,18 @@ class DesktopApi:
         self._message = "Расписание на паузе"
         settings = self._store.get_settings()
         self._config = {key: settings[key] for key in (
-            "ffmpeg_path", "recordings_dir", "prevent_sleep", "default_duration_minutes",
+            "recording_enabled", "ffmpeg_path", "recordings_dir", "prevent_sleep", "default_duration_minutes",
             "minimum_recording_minutes", "recording_name_template", "recording_format",
             "recording_quality", "recording_fps", "recording_width", "recording_height", *ALERT_DEFAULTS)}
+        self._capabilities = desktop_capabilities()
+        if not self._capabilities["recording"]:
+            self._config["recording_enabled"] = False
         self._alerts = HiddenWindowAlerts(self._config, alert_backend)
         self._meeting_target = None
         self._sleep = sleep_inhibitor if sleep_inhibitor is not None else SleepInhibitor()
         self._schedule_enabled = False
         self._recording_active = False
+        self._session_recording = False
         self._last_recording = None
         self._closing = False
         self._close_allowed = False
@@ -95,7 +100,7 @@ class DesktopApi:
             self._message = str(message)
 
     def _sync_power(self):
-        self._sleep.set_active(self._config["prevent_sleep"] and
+        self._sleep.set_active(self._capabilities["prevent_sleep"] and self._config["prevent_sleep"] and
                                (self._schedule_enabled or self._recording_active))
 
     def _on_visibility(self, hidden, target=None):
@@ -141,6 +146,7 @@ class DesktopApi:
         with self._lock:
             self._recording_active = True
             config = dict(self._config)
+            self._session_recording = config["recording_enabled"]
         try:
             with self._lock:
                 self._sync_power()
@@ -159,11 +165,12 @@ class DesktopApi:
             with self._lock:
                 self._on_visibility(False)
                 self._recording_active = False
+                self._session_recording = False
                 self._sync_power()
 
     def _ensure_scheduler(self):
         if self._closing:
-            raise ValueError("Приложение завершает запись и закрывается.")
+            raise ValueError("Приложение завершает лекцию и закрывается.")
         if self._account_active():
             raise ValueError("Сначала завершите вход в Яндекс и закройте открытый браузер.")
         if self._scheduler is None:
@@ -177,11 +184,13 @@ class DesktopApi:
     def get_settings(self):
         def read():
             with self._lock:
-                return dict(self._config)
+                return {**self._config, "capabilities": dict(self._capabilities)}
         return self._reply(read)
 
     def get_recording_options(self):
         def read():
+            if not self._capabilities["recording"]:
+                raise ValueError("Запись пока доступна только в Windows.")
             from video_settings import monitor_size, resolve_video_settings
             hwnd = 0
             window = getattr(self._alerts.backend, "window", None)
@@ -198,6 +207,8 @@ class DesktopApi:
         def save():
             if not isinstance(payload, dict) or set(payload) - self._config.keys():
                 raise ValueError("Некорректные настройки записи.")
+            if payload.get("recording_enabled") and not self._capabilities["recording"]:
+                raise ValueError("Запись пока доступна только в Windows. Подключение к лекциям работает без записи.")
             if "recordings_dir" in payload and isinstance(payload["recordings_dir"], str) and payload["recordings_dir"]:
                 directory = Path(payload["recordings_dir"]).expanduser().resolve()
                 if directory.is_relative_to(Path(__file__).resolve().parent):
@@ -218,6 +229,8 @@ class DesktopApi:
                 old = dict(self._config)
                 settings = self._store.save_settings(payload)
                 self._config = {key: settings[key] for key in old}
+                if not self._capabilities["recording"]:
+                    self._config["recording_enabled"] = False
                 try:
                     self._sync_power()
                 except Exception:
@@ -263,6 +276,8 @@ class DesktopApi:
                                       "active": bool(scheduler and scheduler.active),
                                       "active_lecture_id": scheduler.active_lecture_id if scheduler else None,
                                       "message": self._message, "closing": self._closing},
+                        "recording_enabled": self._config["recording_enabled"],
+                        "recording_active": bool(scheduler and scheduler.active and self._session_recording),
                         "account_login": self._account_active(),
                         "alerts": self._alerts.state(),
                         "sleep_prevented": self._sleep.active, "last_recording": self._last_recording}
@@ -307,7 +322,7 @@ class DesktopApi:
             if lecture is None:
                 raise ValueError("Лекция не найдена.")
             if lecture.status == "running":
-                raise ValueError("Сначала остановите текущую запись.")
+                raise ValueError("Сначала завершите текущую лекцию.")
             if not self._store.delete(lecture_id, delete_recording=delete_file):
                 raise ValueError("Лекцию не удалось удалить: её состояние изменилось. Обновите расписание.")
             return None
@@ -381,7 +396,7 @@ class DesktopApi:
                     scheduler.stop()
                     self._schedule_enabled = False
                     self._sync_power()
-                    self._message = ("Расписание на паузе · текущая запись продолжается"
+                    self._message = ("Расписание на паузе · текущая лекция продолжается"
                                      if scheduler.active else "Расписание на паузе")
             return None
         return self._reply(change)
@@ -391,7 +406,7 @@ class DesktopApi:
             with self._lock:
                 if self._scheduler and self._scheduler.active:
                     self._scheduler.cancel_active()
-                    self._message = "Останавливаем запись и выходим из лекции…"
+                    self._message = "Завершаем запись и выходим из лекции…" if self._session_recording else "Выходим из лекции…"
             return None
         return self._reply(stop)
 
@@ -406,7 +421,7 @@ class DesktopApi:
                 if self._account_active():
                     raise ValueError("Браузер для входа уже открыт.")
                 if self._scheduler and (self._scheduler.running or self._scheduler.active):
-                    raise ValueError("Приостановите расписание и завершите текущую запись перед входом в аккаунт.")
+                    raise ValueError("Приостановите расписание и завершите текущую лекцию перед входом в аккаунт.")
                 self._account_cancel = threading.Event()
                 self._message = "Войдите в Яндекс корпоративным аккаунтом, затем закройте браузер"
                 def login():
@@ -440,7 +455,7 @@ class DesktopApi:
                 self._close_allowed = True
                 self._sleep.close()
                 return True
-            self._message = "Сохраняем запись и закрываем приложение…"
+            self._message = "Сохраняем запись и закрываем приложение…" if self._session_recording else "Выходим из лекции и закрываем приложение…"
         def cleanup():
             if scheduler:
                 while not scheduler.wait_idle(1):
@@ -487,17 +502,25 @@ class _InstanceLock:
         self._file.close()
 
 
+def ui_file() -> Path:
+    """Nuitka data may live in MacOS or Resources inside a macOS bundle."""
+    root = Path(__file__).resolve().parent
+    candidates = [root / "ui" / "index.html", root.parent / "Resources" / "ui" / "index.html"]
+    ui = next((path for path in candidates if path.is_file()), candidates[0])
+    if not ui.is_file():
+        raise RuntimeError("Не найдены файлы интерфейса ui/index.html. Проверьте установку приложения.")
+    return ui
+
+
 def main() -> None:
     import webview
 
-    ui = Path(__file__).resolve().parent / "ui" / "index.html"
-    if not ui.is_file():
-        raise RuntimeError("Не найдены файлы интерфейса ui/index.html. Проверьте установку приложения.")
+    ui = ui_file()
     with _InstanceLock(user_data_dir() / "desktop.lock"):
         api = DesktopApi()
         window = webview.create_window("Телекон — календарь лекций", str(ui), js_api=api,
                                        width=1220, height=820, min_size=(820, 600),
-                                       background_color="#171819", text_select=True)
+                                       background_color="#E6F1FA", text_select=True)
         window.events.closing += lambda: api._request_close(window)
         api._alerts.backend.window = window
         window.events.closed += api._alerts.close
@@ -506,6 +529,9 @@ def main() -> None:
 
 if __name__ == "__main__":
     import sys
+    if len(sys.argv) == 3 and sys.argv[1] == "--portable-self-check":
+        from portable_diagnostics import run_portable_check
+        raise SystemExit(run_portable_check(Path(sys.argv[2]).resolve()))
     if len(sys.argv) == 3 and sys.argv[1] == "--self-check":
         from diagnostics import run_self_check
         raise SystemExit(run_self_check(Path(sys.argv[2]).resolve()))

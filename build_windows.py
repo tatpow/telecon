@@ -46,10 +46,12 @@ def stamp_version(executable: Path, label: str, numeric: str) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--version", default="2026.10.16.3")
+    parser.add_argument("--version", default="v0.4.0b")
     parser.add_argument("--output-dir", type=Path, default=ROOT / "build" / "windows-ffmpeg")
     parser.add_argument("--skip-compile", action="store_true")
     parser.add_argument("--no-hashsum", action="store_true", help="Omit checksum files and source hashes.")
+    parser.add_argument("--validation", choices=("full", "portable"), default="full",
+                        help="Full desktop recording checks (default), or explicitly limited CI UI/browser smoke checks.")
     args = parser.parse_args()
     if sys.platform != "win32" or platform.machine().lower() not in ("amd64", "x86_64"):
         raise SystemExit("Build on Windows x64.")
@@ -79,7 +81,7 @@ def main() -> None:
             "--include-data-dir=ui=ui", "--output-filename=Telecon.exe",
             f"--output-dir={output}", f"--report={output / 'compilation-report.xml'}",
             f"--product-version={numeric_version}", f"--file-version={numeric_version}",
-            "--product-name=Telecon", "--file-description=Telecon lecture recorder", "app.py",
+            "--product-name=Telecon", "--file-description=Telecon lecture assistant", "app.py",
         ]
         (output / "build-command.json").write_text(json.dumps(command, indent=2), encoding="utf-8")
         print("Compiling standalone application…", flush=True)
@@ -110,8 +112,10 @@ def main() -> None:
     # Preserve the revision directory expected by the packaged Playwright driver.
     browser_directory = chromium.parent.parent
     shutil.copytree(browser_directory, release / "ms-playwright" / browser_directory.name)
-    for name in ("README.md", "AGENTS.md", "BUILDING.md", "CHECKS.md", "RELEASE_NOTES.md", "LICENSE"):
+    for name in ("README.md", "AGENTS.md", "BUILDING.md", "CHECKS.md", "RELEASE_NOTES.md", "CONTRIBUTING.md", "DESIGN.md", "LICENSE"):
         shutil.copy2(ROOT / name, release / name)
+    shutil.copytree(ROOT / "docs" / "images", release / "docs" / "images")
+    shutil.copy2(ROOT / "docs" / "USER_GUIDE.md", release / "docs" / "USER_GUIDE.md")
     (release / "START-HERE.txt").write_text(
         f"Телекон {args.version} для Windows x64\n\n"
         "Распакуйте весь архив в отдельную папку и запустите Telecon.exe.\n"
@@ -119,10 +123,14 @@ def main() -> None:
         "Python и OBS устанавливать не нужно. Требуется Microsoft Edge WebView2 Runtime.\n"
         "Откройте «Настройки» и войдите корпоративным аккаунтом Яндекса.\n"
         "Вход открывает главную https://telemost.yandex.ru/; ссылку на созвон добавляйте в карточку лекции.\n"
-        "По умолчанию видео сохраняется в Видео/Telecon.\n"
-        "Опция предотвращения сна действует при расписании/записи; блокировку Windows не отключает.\n",
+        "По умолчанию Телекон только подключается. Запись включается в Настройки → Запись.\n"
+        "При включённой записи видео сохраняется в Видео/Telecon или выбранную папку.\n"
+        "Опция предотвращения сна действует при расписании/лекции; блокировку Windows не отключает.\n",
         encoding="utf-8",
     )
+    if args.validation == "portable":
+        with (release / "START-HERE.txt").open("a", encoding="utf-8") as note:
+            note.write("\nCI-сборка: проверены интерфейс и браузер; запись в интерактивной Windows 11 не проверялась.\n")
 
     licenses = release / "licenses"
     packages = ["pywebview", "playwright", "imageio-ffmpeg", "proc-tap", "windows-capture",
@@ -143,23 +151,39 @@ def main() -> None:
         "See ffmpeg.exe -L and ffmpeg.exe -version for licensing and build configuration.\n",
         encoding="utf-8",
     )
-    report = output / "packaged-self-check.json"
-    print("Testing the packaged EXE (temporary UI, browser, video, audio and power request)…", flush=True)
-    result = subprocess.run([str(release / "Telecon.exe"), "--self-check", str(report)],
+    report = output / f"packaged-{'self' if args.validation == 'full' else 'portable'}-check.json"
+    check_flag = "--self-check" if args.validation == "full" else "--portable-self-check"
+    print(f"Testing packaged EXE: {args.validation} validation (portable does not verify recording)…", flush=True)
+    result = subprocess.run([str(release / "Telecon.exe"), check_flag, str(report)],
                             cwd=release, timeout=180)
     checks = json.loads(report.read_text(encoding="utf-8")) if report.exists() else {}
     shutil.copy2(report, release / "SELF-CHECK.json") if report.exists() else None
     if result.returncode or checks.get("ok") is not True:
         raise SystemExit(f"Packaged self-check failed: {report}")
+    if args.validation == "portable" and (checks.get("mode") != "portable" or checks.get("recording_checked") is not False):
+        raise SystemExit("Invalid portable self-check report; no archive created.")
+    portable_checks = checks
+    if args.validation == "full":
+        portable_report = output / "packaged-portable-check.json"
+        print("Testing the packaged CI browser/UI mode as well…", flush=True)
+        portable_result = subprocess.run([str(release / "Telecon.exe"), "--portable-self-check", str(portable_report)],
+                                         cwd=release, timeout=150)
+        portable_checks = json.loads(portable_report.read_text(encoding="utf-8")) if portable_report.exists() else {}
+        if (portable_result.returncode or portable_checks.get("ok") is not True
+                or portable_checks.get("mode") != "portable"
+                or portable_checks.get("recording_checked") is not False):
+            raise SystemExit(f"Packaged portable self-check failed; no archive created: {portable_report}")
 
     source_files = ["app.py", "diagnostics.py", "integrations.py", "storage.py", "scheduler.py",
                     "recording.py", "recording_names.py", "video_settings.py", "power.py", "notifications.py",
-                    "ui/index.html", "ui/app.js", "ui/styles.css"]
+                    "capabilities.py", "portable_diagnostics.py", "ui/index.html", "ui/app.js", "ui/motion.js", "ui/styles.css"]
     manifest = {
         "version": args.version, "windows_version": numeric_version,
+        "validation": args.validation, "recording_checked": args.validation == "full",
         "python": sys.version, "platform": platform.platform(),
         "dependencies": {name: importlib.metadata.version(name) for name in packages + ["Nuitka"]},
         "self_check": checks["checks"],
+        "portable_self_check": portable_checks["checks"],
     }
     if not args.no_hashsum:
         manifest["source_sha256"] = {name: hashlib.sha256((ROOT / name).read_bytes()).hexdigest() for name in source_files}

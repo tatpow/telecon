@@ -25,6 +25,7 @@ ALERT_DEFAULTS = {
     "alert_volume": 50,
 }
 SETTINGS_DEFAULTS = {
+    "recording_enabled": False,
     "ffmpeg_path": "",
     "recordings_dir": "",
     "display_name": "",
@@ -107,6 +108,8 @@ def _validate_settings(settings: dict) -> dict:
     validated = dict(settings)
     validate_video_settings(settings, partial=True)
     for key, value in settings.items():
+        if key == "recording_enabled" and type(value) is not bool:
+            raise ValueError("Запись должна быть включена или выключена.")
         if key in ("alert_sound", "alert_notification", "alert_badge") and type(value) is not bool:
             raise ValueError("Способы предупреждения должны быть включены или выключены.")
         if key == "alert_volume" and (type(value) is not int or not 0 <= value <= 100):

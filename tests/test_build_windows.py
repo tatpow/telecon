@@ -8,6 +8,7 @@ class BuildVersionTests(unittest.TestCase):
         self.assertEqual(windows_version("v0.3.0b"), "0.3.0.0")
         self.assertEqual(windows_version("v0.3.1b"), "0.3.1.0")
         self.assertEqual(windows_version("v0.3.2b"), "0.3.2.0")
+        self.assertEqual(windows_version("v0.4.0b"), "0.4.0.0")
         self.assertEqual(windows_version("v0.2.0b"), "0.2.0.0")
         self.assertEqual(windows_version("v0.2.0b3"), "0.2.0.3")
         self.assertEqual(windows_version("v1.0.0rc2"), "1.0.0.2")

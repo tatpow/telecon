@@ -39,6 +39,18 @@ and document limitations.
 
 ## Recording files and interface
 
+- Connection is the default and primary workflow. `recording_enabled` defaults
+  to false for fresh and upgraded installations. When disabled, never run the
+  recorder preflight, instantiate a recorder, resolve capture HWNDs or start
+  audio/video capture. Still verify joining, monitor connection, honor end time
+  and cancellation, and close the browser. Snapshot the mode at session start;
+  settings changes affect the next session only. Do not report a saved recording
+  for a connection-only session. Keep temporary power requests for active lectures.
+- UI: light Liquid Glass + Material 3, using #B9C255 / #E6F1FA / #5798D7 and
+  derived tones. See DESIGN.md. Settings have General, Recording and Notifications
+  tabs, with recording's master switch in its own tab. Use accessible switches
+  instead of checkbox squares, maintain keyboard operation and reduced motion.
+  Keep tabs and Save/Cancel visible while the active settings panel scrolls.
 - Persist each video's path, actual duration, result and filesystem identity in
   SQLite. Calendar-only deletion keeps the file; deleting the associated video
   requires an explicit choice and confirmation. Never infer ownership by scanning
@@ -107,14 +119,14 @@ sync with [README.md](README.md) and [CHECKS.md](CHECKS.md).
 - Windows x64: build on Windows with CPython 3.12, install
   `requirements-build.lock.txt`, install Playwright Chromium, run unittest, then
   `python build_windows.py --version VERSION --no-hashsum` with a fresh release
-  label (such as `v0.3.2b`) or a numeric version. This includes FFmpeg, Chromium,
+  label (such as `v0.4.0b`) or a numeric version. This includes FFmpeg, Chromium,
   C++ runtime DLLs and documentation; the packaged EXE self-check must pass before
   ZIP creation. Checks include camera-dialog recovery, minimizing/restoring capture,
   filename templates, short-video filtering and both deletion modes. No-hashsum
   builds omit checksum files and source hashes. Include `RELEASE_NOTES.md` in
-  distributions; keep `COMMIT_MESSAGE.md` as a source-side commit description.
-- Linux: build on Linux using a separate virtual environment, `requirements-build.txt`
-  and `pywebview[pyside6]`; use Nuitka standalone with its PySide6 plugin. Commands,
+  distributions alongside `DESIGN.md`; keep `COMMIT_MESSAGE.md` as a source-side commit description.
+- Linux: build on Linux using a separate virtual environment, `requirements-build-posix.txt`
+  and `python build_desktop.py --version VERSION --no-hashsum`; use Nuitka standalone with its PySide6 plugin. Commands,
   Chromium placement and launch environment are in BUILDING.md. Only UI/calendar/
   account setup are experimental; do not claim the Windows recording backend works.
 - macOS: build on macOS using native CPython and the Cocoa/PyObjC backend; run Nuitka
@@ -122,3 +134,30 @@ sync with [README.md](README.md) and [CHECKS.md](CHECKS.md).
   use the signing/notarization process for public distribution. See BUILDING.md.
 - Never represent an untested Linux/macOS recipe or Windows cross-compilation as a
   tested native release. Never package real profiles, cookies, databases or recordings.
+
+## Motion, community documentation and CI
+
+- Keep version v0.4.0b for this requested revision. Animate finite dialog/card/tab
+  transitions without replaying unchanged cards on polling. Respect reduced motion
+  in JavaScript and CSS, including dialog backdrops; preserve Escape and focus return.
+- `capabilities.py` declares Windows-only recording, power and hidden-window alerts.
+  Unsupported settings stay disabled; stale recording preferences must never block
+  connection on Linux/macOS. Do not call Windows power APIs there.
+- README targets users. Keep its real demonstration screenshots in `docs/images/`;
+  never use personal calendars or generated mockups as proof of the actual UI.
+  Keep detailed settings in `docs/USER_GUIDE.md` and contributor guidance in
+  `CONTRIBUTING.md`; AI-assisted contributions are welcome with honest verification.
+- `.github/workflows/ci.yml` checks pushes/PRs on native Linux, Windows and both Mac
+  architectures. `build.yml` builds on manual dispatch and initial-review branches
+  `codex/native-builds-*`. Use read-only permissions, pinned official actions and
+  no secrets, profile data, automatic tags or release publication.
+- `build_desktop.py` builds natively on Linux x64 / macOS arm64 or x64. Copy Chromium,
+  docs, screenshots and licenses; run the packaged `--portable-self-check` before
+  creating an archive. Preserve macOS app/framework symlinks and executable modes.
+- `--portable-self-check` checks a disposable calendar, Chromium and the native
+  UI/JS bridge; it does not certify recording. On Windows hosted CI only, explicit
+  `--validation portable` is allowed, marked `recording_checked: false`. The local
+  Windows release continues to require the complete recording self-check by default.
+  Full local builds also run the packaged portable check before ZIP creation;
+  use the shipped full Chromium channel, never assume a separate headless shell.
+  GitHub's Windows Server runner is not a Windows 11 desktop validation.

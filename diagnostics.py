@@ -14,6 +14,7 @@ import ctypes
 from ctypes import wintypes
 from datetime import datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 
 
 def run_self_check(report_path: Path) -> int:
@@ -191,6 +192,34 @@ def run_self_check(report_path: Path) -> int:
                 media_store.save_recording(third, short_result)
                 assert media_store.recording_for(third)["note"], "Short recording explanation missing"
                 report["checks"]["calendar_and_video_deletion"] = True
+
+                # Exercise connection-only against our actual synthetic Chromium page,
+                # while the outer fixture retains ownership of that browser/profile.
+                import integrations as meeting_integration
+                page.set_content('<button data-testid="end-call-alt-button">Выйти</button><p>Синтетическая встреча</p>')
+                originals = {name: getattr(meeting_integration, name) for name in
+                             ("_join_telemost", "check_recorder", "FFmpegRecorder", "browser_target")}
+                closed = []
+                def forbidden_capture(*args, **kwargs):
+                    raise AssertionError("Connection-only attempted to initialize recording")
+                try:
+                    meeting_integration._join_telemost = lambda *args: (
+                        SimpleNamespace(stop=lambda: closed.append("driver")),
+                        SimpleNamespace(close=lambda: closed.append("browser")), page, page)
+                    for name in ("check_recorder", "FFmpegRecorder", "browser_target"):
+                        setattr(meeting_integration, name, forbidden_capture)
+                    now = datetime.now()
+                    joined_status = []
+                    result = meeting_integration.run_lecture(
+                        Lecture(0, "Synthetic connection only", "telemost.yandex.ru/j/synthetic-check",
+                                now, now + timedelta(seconds=2)), status_callback=joined_status.append)
+                    assert result is None and closed == ["browser", "driver"]
+                    assert any(message.startswith("Вы подключены:") for message in joined_status)
+                    assert not any("запис" in message.lower() for message in joined_status)
+                    report["checks"]["connection_only_no_capture"] = True
+                finally:
+                    for name, original in originals.items():
+                        setattr(meeting_integration, name, original)
             finally:
                 try:
                     if recorder is not None:
@@ -222,12 +251,17 @@ def run_self_check(report_path: Path) -> int:
             ui = Path(__file__).resolve().parent / "ui" / "index.html"
             assert ui.is_file(), "Packaged UI files are missing"
             window = webview.create_window("Телекон — проверка билда", str(ui), js_api=api,
-                                           width=1000, height=760, background_color="#171819")
+                                           width=1000, height=760, background_color="#E6F1FA")
             api._alerts.backend.window = window
             window.events.minimized += lambda: minimized.set()
             def wait_for_bridge():
                 try:
                     report["checks"]["native_ui_js_bridge"] = called.wait(20)
+                    assert not api.get_settings()["data"]["recording_enabled"]
+                    assert window.evaluate_js("Array.from(document.querySelectorAll('input[type=checkbox]')).every(item=>item.getAttribute('role')==='switch')")
+                    assert window.evaluate_js("document.querySelectorAll('[role=tab]').length") == 3
+                    assert window.evaluate_js("getComputedStyle(document.documentElement).getPropertyValue('--frost').trim()") == "#E6F1FA"
+                    report["checks"]["native_connection_first_ui"] = True
                     window.minimize()
                     assert minimized.wait(5), "Native app did not minimize"
                     result = api.quick_join({"url": "telemost.yandex.ru/j/synthetic-check",

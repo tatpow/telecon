@@ -1,7 +1,9 @@
+import sys
 import unittest
 from unittest.mock import Mock, patch
 import power
 
+@unittest.skipUnless(sys.platform == "win32", "Windows native backend")
 class PowerTests(unittest.TestCase):
     def kernel(self):
         kernel=Mock()

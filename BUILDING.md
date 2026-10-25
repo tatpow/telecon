@@ -1,157 +1,235 @@
-# Сборка Телекона на разных платформах
+# Сборка Телекона
 
-Телекон — **vibecode / GVP (Generated Viable Product)** в смысле
-[концепции GVP](https://github.com/tatpow/GVP). Способ создания не заменяет
-проверку готового приложения.
+Канонические команды сборки находятся в этом файле.
+Пользовательский запуск описан в [README](README.md), правила разработки —
+в [CONTRIBUTING](CONTRIBUTING.md) и [AGENTS](AGENTS.md).
 
-| Целевая ОС | Где собирать | Статус |
-| --- | --- | --- |
-| Windows x64, build 20348+ | Windows x64, CPython 3.12 | Полный backend записи; EXE проверяется перед ZIP |
-| Linux x64 | Linux x64, CPython 3.12, GCC, Qt/PySide6 | Экспериментальные UI/календарь/аккаунт; записи и защиты от сна нет |
-| macOS arm64 или x86_64 | macOS с Python той же архитектуры и Xcode CLI tools | Экспериментальные UI/календарь/аккаунт; записи и защиты от сна нет |
+Текущая версия — **v0.4.0b**. Сборки создаются без файлов Hashsum.
+Все релизные команды используют **нативный CPython 3.12**:
+каждая ОС и архитектура собирается на соответствующем хосте.
+Для команд `node --check` отдельно нужен [Node.js](https://nodejs.org/en/download).
+Он используется для проверки JavaScript и не требуется пользователю готового приложения.
 
-Linux/macOS-команды ниже не проверялись на этой Windows. Это инструкции для
-нативной сборки и последующей проверки на соответствующей ОС, а не готовые релизы.
-Не обещайте переносимость DLL или Windows-захвата на другие платформы.
+| Цель | Среда CI | Результат | Проверка записи |
+|---|---|---|---|
+| Linux x64 | Ubuntu 24.04 x64 | Папка + `.tar.gz` | Не поддерживается |
+| Windows 11 x64 | Windows Server 2025 x64 | Папка + `.zip` | Локально на Windows 11 |
+| macOS arm64 | macOS 15 Apple Silicon | `Telecon.app` + `.zip` | Не поддерживается |
+| macOS x64 | macOS 15 Intel | `Telecon.app` + `.zip` | Не поддерживается |
 
-## Windows x64 — проверяемая сборка
+Linux и macOS пока экспериментальные: календарь, настройки, аккаунт,
+подключение и выход из встречи. Запись, защита от сна и предупреждения
+о свёрнутой встрече остаются Windows-функциями.
+
+## Linux
+
+Инструкции ниже предназначены для **Ubuntu, Linux Mint и Fedora**.
+CI использует Ubuntu 24.04. Mint/Fedora не становятся проверенными
+дистрибутивами только из-за наличия этих команд.
+
+### Ubuntu 24.04 LTS
+
+Установите системные зависимости:
+
+```bash
+sudo apt-get update
+sudo apt-get install -y python3.12 python3.12-venv python3.12-dev build-essential patchelf xvfb xauth libegl1 libopengl0 libgl1 libxcb-cursor0 libxcb-icccm4 libxcb-keysyms1 libxcb-shape0 libxcb-xinerama0 libxcb-render-util0 libxkbcommon-x11-0
+```
+
+Затем выполните общий раздел «Окружение и сборка Linux».
+
+На более новой Ubuntu используйте отдельный CPython 3.12; не меняйте
+системный Python ради сборки. У бинарника, собранного на новой glibc,
+может не быть обратной совместимости со старыми дистрибутивами.
+
+### Linux Mint 22.x
+
+[Mint 22.x основан на Ubuntu 24.04](https://linuxmint.com/rel_wilma_mate.php),
+поэтому используйте те же команды APT и общий раздел ниже.
+Для Mint 21.x / LMDE совместимость этого архива отдельно не подтверждена.
+
+### Fedora
+
+Установите отдельный Python 3.12 и инструменты:
+
+```bash
+sudo dnf install -y python3.12 python3.12-devel gcc gcc-c++ make patchelf libglvnd-glx libglvnd-egl mesa-libGL mesa-libEGL libxcb xcb-util-cursor xcb-util-wm xcb-util-keysyms xcb-util-image xcb-util-renderutil libxkbcommon-x11 nss alsa-lib libXcomposite libXdamage libXrandr libXtst libXScrnSaver cups-libs
+```
+
+Fedora предоставляет [несколько версий Python параллельно](https://developer.fedoraproject.org/tech/languages/python/multiple-pythons.html).
+Не подменяйте системный `python3`. Для воспроизводимого результата собирайте
+и проверяйте архив на целевой Fedora: Ubuntu-артефакт не считается
+автоматически проверенным Fedora-релизом.
+
+### Окружение и сборка Linux
+
+Из корня исходников:
+
+```bash
+python3.12 -m venv build/builder-venv
+source build/builder-venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install -r requirements-build-posix.txt
+export PLAYWRIGHT_BROWSERS_PATH="$PWD/build/playwright-browsers"
+python -m playwright install chromium
+python -m unittest discover -s tests -v
+node --check ui/app.js
+node --check ui/motion.js
+python app.py --portable-self-check build/source-smoke.json
+python build_desktop.py --version v0.4.0b --no-hashsum
+```
+
+Команды smoke-check и сборки запускайте в графической сессии.
+Для CI на Ubuntu сначала установите зависимости Chromium
+`python -m playwright install --with-deps chromium`, затем используйте:
+
+```bash
+QT_API=pyside6 QTWEBENGINE_DISABLE_SANDBOX=1 QTWEBENGINE_CHROMIUM_FLAGS=--disable-gpu xvfb-run -a python build_desktop.py --version v0.4.0b --no-hashsum
+```
+
+Отключение sandbox в этой команде относится только к изолированному CI/Xvfb.
+Для обычного запуска приложения эти переменные не задаются.
+
+Результат: `dist/Telecon-Linux-x64-v0.4.0b.tar.gz`.
+Распакуйте всю папку и запустите `./Telecon`.
+Нужны системные библиотеки графики/звука, соответствующие зависимостям выше;
+Python в готовом архиве отдельно не требуется. Qt/PySide6 и Chromium включены.
+Права исполнения и символьные ссылки сохраняются архивом TAR.
+
+## Windows 11
+
+Нужна Windows x64, CPython 3.12 x64 и
+[Microsoft Edge WebView2 Runtime](https://developer.microsoft.com/en-us/microsoft-edge/webview2/).
+Для нативного звука используется process-loopback API Windows build 20348+;
+основная пользовательская цель — Windows 11.
+Для упаковки также нужен установленный Microsoft Visual C++ x64 Redistributable.
 
 В PowerShell из корня проекта:
 
 ```powershell
 py -3.12 -m venv build\builder-venv
 .\build\builder-venv\Scripts\python.exe -m pip install -r requirements-build.lock.txt
+$env:PLAYWRIGHT_BROWSERS_PATH = Join-Path (Get-Location) 'build\playwright-browsers'
 .\build\builder-venv\Scripts\python.exe -m playwright install chromium
 .\build\builder-venv\Scripts\python.exe -m unittest discover -s tests -v
-.\build\builder-venv\Scripts\python.exe build_windows.py --version v0.3.2b --no-hashsum
+node --check ui/app.js
+node --check ui/motion.js
+.\build\builder-venv\Scripts\python.exe build_windows.py --version v0.4.0b --no-hashsum
 ```
 
-Команда выше собирает релиз `v0.3.2b` с изменениями от 18 октября.
-Для следующих изменений задайте **новую** версию: существующий релиз
-не перезаписывается. Итог самопроверки готового EXE находится в `SELF-CHECK.json`.
+Nuitka собирает standalone EXE; FFmpeg, Chromium, runtime DLL и документация
+добавляются рядом. **Полный self-check упакованного EXE обязателен до ZIP**:
+он проверяет настоящий захват/звук, сворачивание, последовательные записи,
+MKV/MP4, 7/60 FPS, файлы, уведомления и подключение без записи.
 
-Нужны установленный Microsoft Visual C++ x64 Redistributable и Edge WebView2.
-Nuitka скачивает совместимый MinGW при необходимости; Visual Studio для этого
-пути не требуется. Используйте новый номер версии для новых исходников.
-Windows lock-файл содержит Windows wheels и не применяется на Linux/macOS.
+Результат: `dist/Telecon-Windows-x64-v0.4.0b.zip`.
+Переносите всю папку, а не один EXE.
+`SELF-CHECK.json` и `BUILD-INFO.json` описывают именно эту сборку.
+Перед ZIP полный локальный сборщик дополнительно выполняет portable-проверку:
+она запускает включённый в архив обычный Chromium в headless-режиме,
+не требуя второй копии headless shell. Четыре результата находятся
+в `BUILD-INFO.json` → `portable_self_check`.
+`--no-hashsum` убирает отдельные checksum-файлы и хеши исходников из манифеста.
 
-Скрипт включает `ui/`, FFmpeg, Chromium, библиотеки захвата, app-local C++ runtime,
-лицензии и Markdown-документацию, включая `RELEASE_NOTES.md`.
-Модули `recording_names.py` и `video_settings.py` включаются как обычные Python-исходники; новых
-зависимостей для шаблонов, фильтра длительности и удаления видео нет. Плагин pywebview в Nuitka 2.8 исключает новый
-`webview.platforms.win32`; скрипт отключает этот фильтр и включает Windows-модуль
-явно, исключая платформенные модули других ОС.
+### Windows в GitHub Actions
 
-Готовый EXE сначала проверяется на временных данных: закрытие ошибки камеры,
-выключение устройств в тестовом интерфейсе, запуск Chromium, настоящая запись
-синтетического видео/звука через FFmpeg, чёрное видео с продолжающимся звуком
-при сворачивании и возврат картинки, native-окно и Python bridge, запуск фонового
-обработчика в свёрнутом Телеконе, показ и снятие уведомления Windows и значка
-на панели задач, шаблон имени, MKV и MP4 с читаемыми дорожками,
-пользовательские размер/FPS и настоящая запись 60 FPS,
-удаление короткой записи, оба способа удаления
-карточки/файла и освобождение power request. Звук в самопроверке выключен. Корпоративная сессия и настоящие лекции не используются.
-
-Результаты — `dist/Telecon-Windows-x64-v0.3.2b/Telecon.exe` и ZIP всей папки.
-Флаг `--no-hashsum` исключает файл `.zip.sha256` и хеши исходников из отчёта.
-Без этого флага контрольные суммы создаются, как в предыдущих сборках.
-Метка релиза `v0.3.2b` записывается в свойства EXE; числовая версия Windows —
-`0.3.2.0`. Поддерживаются также прежние версии вида `2026.10.17.1`. В релизе находятся `SELF-CHECK.json`, `BUILD-INFO.json` и
-`START-HERE.txt`. Распаковывайте всю папку, не копируйте один EXE.
+Hosted runner `windows-2025` — это **Windows Server 2025**, а не Windows 11.
+CI использует явно ограниченную команду:
 
 ```powershell
-.\dist\Telecon-Windows-x64-v0.3.2b\Telecon.exe --self-check "$env:TEMP\telecon-self-check.json"
+python build_windows.py --version v0.4.0b --no-hashsum --validation portable
 ```
 
-`--skip-compile` предназначен только для повторной упаковки неизменённого
-скомпилированного приложения; не используйте его после правки исходников или
-для изменения версии уже собранного EXE.
+Она компилирует реальный Windows-пакет, проверяет календарь, запуск вложенного
+Chromium и native WebView2/JS bridge. Она **не проверяет WGC/WASAPI, 60 FPS
+и сворачивание записи** в интерактивной пользовательской сессии.
+В манифесте будет `validation: portable`, `recording_checked: false`.
+Это CI-артефакт, не подтверждение работы записи на Windows 11.
+Обычная локальная команда сохраняет `--validation full` по умолчанию.
 
-## Linux — экспериментальная сборка интерфейса
+## macOS
 
-Установите CPython 3.12 с venv, GCC/G++, patchelf и системные библиотеки Qt/
-Chromium для вашего дистрибутива. Например, на Debian/Ubuntu инструменты сборки
-обычно устанавливаются пакетами `build-essential`, `python3-dev`, `python3-venv`,
-`patchelf`. Используйте виртуальное окружение, не системный pip.
-
-```bash
-python3.12 -m venv build/linux-venv
-source build/linux-venv/bin/activate
-python -m pip install -r requirements-build.txt 'pywebview[pyside6]'
-python -m playwright install --with-deps chromium
-python -m nuitka --standalone --enable-plugin=pyside6 \
-  --include-data-dir=ui=ui --include-package=imageio_ffmpeg \
-  --playwright-include-browser=none \
-  --nofollow-import-to=proctap,windows_capture \
-  --output-dir=build/linux --output-filename=Telecon app.py
-```
-
-Чтобы Chromium не зависел от кеша сборщика, скопируйте установленную ревизию
-рядом с бинарным файлом, в поддерживаемую приложением папку `ms-playwright`:
+Собирайте отдельно на **Apple Silicon (arm64)** и **Intel (x64)**.
+Не называйте две отдельные сборки universal binary.
+Нужны Xcode Command Line Tools и нативный CPython 3.12.
+Например, с Homebrew:
 
 ```bash
-python - <<'PY'
-from pathlib import Path
-from shutil import copytree
-from playwright.sync_api import sync_playwright
-with sync_playwright() as p:
-    revision = Path(p.chromium.executable_path).parent.parent
-copytree(revision, Path('build/linux/app.dist/ms-playwright') / revision.name)
-PY
-PYWEBVIEW_GUI=qt ./build/linux/app.dist/Telecon
-```
-
-Переносите всю `app.dist`. На целевой машине проверьте QtWebEngine, календарь,
-сохранение тестовой лекции и вход в аккаунт через главную Телемоста. Не запускайте
-Windows `--self-check`: он намеренно проверяет Windows API записи и не является
-кроссплатформенным тестом. Не включайте расписание/запись в этой экспериментальной
-сборке: соответствующие native-backend и предотвращение сна не портированы.
-Зависимости Chromium устанавливаются отдельно на целевой системе; упаковка
-библиотек Qt не делает Linux-бинарник совместимым со всеми дистрибутивами.
-
-## macOS — экспериментальная сборка интерфейса
-
-Установите Xcode Command Line Tools (`xcode-select --install`) и обычный
-CPython 3.12 той архитектуры, для которой собираете приложение. Для Apple Silicon
-и Intel нужны отдельные сборки; эти команды не создают universal binary.
-
-```bash
-python3.12 -m venv build/macos-venv
-source build/macos-venv/bin/activate
-python -m pip install -r requirements-build.txt
+xcode-select --install
+brew install python@3.12
+"$(brew --prefix python@3.12)/bin/python3.12" -m venv build/builder-venv
+source build/builder-venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install -r requirements-build-posix.txt
+export PLAYWRIGHT_BROWSERS_PATH="$PWD/build/playwright-browsers"
 python -m playwright install chromium
-python -m nuitka --standalone --macos-create-app-bundle \
-  --include-data-dir=ui=ui --include-package=imageio_ffmpeg \
-  --playwright-include-browser=none \
-  --nofollow-import-to=proctap,windows_capture \
-  --output-dir=build/macos --output-filename=Telecon app.py
+python -m unittest discover -s tests -v
+node --check ui/app.js
+node --check ui/motion.js
+python app.py --portable-self-check build/source-smoke.json
+python build_desktop.py --version v0.4.0b --no-hashsum
 ```
 
-pywebview использует Cocoa/WebKit и PyObjC. Проверьте созданный `.app` в
-`build/macos`: имя каталога приложения определяется Nuitka. После определения
-точного пути к бинарнику `Contents/MacOS/Telecon` скопируйте установленную
-ревизию Chromium рядом с ним, в `Contents/MacOS/ms-playwright/<ревизия>`;
-принцип Python-копирования тот же, что в Linux-рецепте. Переносите весь `.app`.
+Nuitka использует `--macos-create-app-bundle` и Cocoa/PyObjC.
+Chromium находится внутри `Telecon.app/Contents/Resources/ms-playwright`.
+Скрипт заново запечатывает внешнюю ad-hoc подпись после добавления браузера,
+проверяет подпись и выполняет smoke-check готового бинарника с native UI.
 
-Все изменения содержимого bundle, включая Chromium и Markdown-документацию,
-выполняются до финальной подписи. Для публичного распространения нужны корректная
-подпись Developer ID и notarization Apple, включая вложенные executable/framework;
-сам по себе запуск Nuitka не подтверждает их выполнение. Проверьте запуск
-на целевой macOS, календарь и корпоративный вход. Windows-запись и защита от сна
-в этой сборке отсутствуют; Windows `--self-check` к ней неприменим.
+Результат:
+`Telecon-macOS-arm64-v0.4.0b.zip` либо
+`Telecon-macOS-x64-v0.4.0b.zip`.
+Архив создаётся через `ditto`, сохраняя структуру bundle и ссылки.
+Если любая проверка не прошла, ZIP не создаётся.
 
-## Проверка и границы релиза
+Ad-hoc подпись **не является Developer ID и нотариализацией**.
+Для публичной поставки с подтверждённым разработчиком необходимы собственные
+Developer ID, entitlements и отдельный процесс подписания/нотариализации Apple.
+Секреты подписи в репозитории не хранятся.
+Информация о системном подтверждении запуска —
+в [документации Apple](https://support.apple.com/en-ie/102445).
 
-Для любой платформы сначала проверяйте standalone-папку или `.app` на целевой ОС.
-После изменения исходников нужна новая компиляция, а не копирование новых `.py`
-поверх скомпилированного приложения. Тестовые и реальные базы, cookies, профили
-браузеров и записи не должны попадать в папку сборки или архив.
+## CI и артефакты
 
-Полный unittest-набор включает Windows-интеграции и запускается в поддерживаемом
-Windows-окружении. Для предварительной проверки общего кода на Linux/macOS можно
-отдельно выполнить `python -m unittest discover -s tests -p test_storage_scheduler.py -v`;
-это не заменяет нативную проверку интерфейса и не подтверждает backend записи.
-Результаты фактических проверок перечислены в [CHECKS.md](CHECKS.md).
+В репозитории подготовлены два workflow:
 
-Документация инструментов: [установка pywebview](https://pywebview.flowrl.com/guide/installation.html),
-[standalone-сборка Nuitka](https://nuitka.net/user-documentation/use-cases.html).
+- **Checks** — unit-тесты и проверка синтаксиса на каждом push и PR;
+  на Linux также headless UI-регрессии:
+  Ubuntu, Windows Server и macOS двух архитектур.
+- **Native builds** — ручная нативная сборка четырёх архивов на трёх ОС.
+  Каждый готовый бинарник проходит свой smoke-check перед архивированием.
+  Ни теги, ни GitHub Releases автоматически не создаются.
+
+Для запуска: **GitHub → Actions → Native builds → Run workflow**,
+выберите ветку с workflow и оставьте `v0.4.0b`.
+Ручной запуск доступен после того, как workflow окажется в default branch.
+Для первичной проверки до слияния сборка также запускается при push в ветку
+`codex/native-builds-*`. Пока изменения существуют только локально, удалённая
+сборка не запускалась.
+
+В успешном запуске откройте **Artifacts** и скачайте нужную архитектуру.
+Артефакты хранятся **3 дня**; ограничения хранения отличаются от бесплатного
+времени стандартных runner в публичном репозитории.
+Каждый архив содержит версию, зависимости и результат проверки.
+
+Workflow использует `contents: read`, закреплённые SHA официальных actions,
+не сохраняет checkout credentials и не использует секреты/реальные профили.
+Код из PR не выполняется через `pull_request_target`.
+Релиз публикуется отдельно после просмотра результатов.
+
+[Стандартные runner GitHub](https://docs.github.com/en/actions/reference/runners/github-hosted-runners) ·
+[Nuitka standalone](https://nuitka.net/user-documentation/use-cases.html) ·
+[Установка pywebview](https://pywebview.flowrl.com/guide/installation)
+
+## Повторная сборка и ограничения
+
+Скрипты отказываются перезаписывать готовый каталог или архив.
+При повторной сборке той же версии сохраните прежние файлы в другой папке,
+затем повторите команду. В CI каждый запуск начинает с чистого checkout.
+
+`RELEASE_NOTES.md` входит в дистрибутив.
+`COMMIT_MESSAGE.md` остаётся описанием коммита в исходниках.
+Реальные базы, профили, cookies и пользовательские записи не упаковываются.
+
+Успешный unit-тест или рецепт не доказывает запуск на другой ОС.
+Фактически выполненные проверки перечисляются в [CHECKS.md](CHECKS.md);
+нативные результаты удалённых сборок подтверждаются конкретным запуском Actions.
