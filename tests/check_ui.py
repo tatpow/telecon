@@ -30,6 +30,7 @@ class BrowserRegressionTests(unittest.TestCase):
             api = DesktopApi(self.store, sleep_inhibitor=Mock(active=False),
                              alert_backend=Mock(window=None, audio_error=""))
         self.addCleanup(api._alerts.close)
+        self.api = api
         api.get_recording_options = lambda: {"ok": True, "data": {
             "screen_width": 1920, "screen_height": 1080, "max_fps": 60,
             "effective": resolve_video_settings({}, (1920, 1080))}}
@@ -40,7 +41,7 @@ class BrowserRegressionTests(unittest.TestCase):
         self.page = browser.new_page(viewport={"width": 1220, "height": 820})
         self.errors = []
         self.page.on("pageerror", lambda error: self.errors.append(str(error)))
-        methods = ["get_state", "get_settings", "get_recording_options", "preview_recording_name"]
+        methods = ["get_state", "get_settings", "save_settings", "get_recording_options", "preview_recording_name"]
         self.page.expose_function("testBridge", lambda method, args: getattr(api, method)(*args))
         self.page.add_init_script("window.pywebview={api:{}};for(const m of " + json.dumps(methods) +
                                   "){window.pywebview.api[m]=(...args)=>window.testBridge(m,args);}")
@@ -66,6 +67,35 @@ class BrowserRegressionTests(unittest.TestCase):
         self.assertEqual(self.page.evaluate("getComputedStyle(document.documentElement).getPropertyValue('--frost').trim()"), "#E6F1FA")
         self.assertNotIn("script", requests)
         self.assertNotIn("stylesheet", requests)
+
+    def test_tray_switches_save_and_keyboard_operation_keeps_footer_accessible(self):
+        page = self.page
+        page.locator("#open-settings").click()
+        page.wait_for_function("()=>document.querySelector('#settings-dialog').open")
+        for name in ("minimize_to_tray", "close_to_tray"):
+            control = page.locator(f'input[name="{name}"]')
+            self.assertFalse(control.is_checked())
+            self.assertEqual(control.get_attribute("role"), "switch")
+            control.focus()
+            page.keyboard.press("Space")
+            self.assertTrue(control.is_checked())
+        self.assertTrue(page.locator("#tray-status").is_visible())
+        page.locator('#settings-form button[type="submit"]').click()
+        page.wait_for_function("()=>!document.querySelector('#settings-dialog').open")
+        self.assertTrue(self.store.get_settings()["minimize_to_tray"])
+        self.assertTrue(self.store.get_settings()["close_to_tray"])
+        page.locator("#open-settings").click()
+        page.wait_for_function("()=>document.querySelector('#settings-dialog').open")
+        self.assertTrue(page.locator('input[name="close_to_tray"]').is_checked())
+        for width in (1220, 820, 390):
+            page.set_viewport_size({"width": width, "height": 820})
+            footer = page.locator('#settings-form button[type="submit"]')
+            self.assertTrue(footer.is_visible())
+            box = footer.bounding_box()
+            self.assertLessEqual(box["y"] + box["height"], 820)
+        page.set_viewport_size({"width": 1220, "height": 820})
+        page.locator("#panel-general").evaluate("panel=>panel.scrollTop=150")
+        page.screenshot(path=str(ROOT / ".qa" / "tray-settings-desktop.png"))
 
     def test_csp_allows_bridge_functions_but_blocks_inline_scripts_and_styles(self):
         # Ordinary page scripts enforce CSP, unlike DevTools page.evaluate.

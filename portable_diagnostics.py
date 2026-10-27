@@ -6,6 +6,7 @@ import sys
 import tempfile
 import threading
 import faulthandler
+import time
 from urllib.parse import urlsplit
 from http.client import HTTPConnection
 from datetime import datetime, timedelta, timezone
@@ -35,7 +36,7 @@ def run_portable_check(report_path: Path) -> int:
               "platform": sys.platform, "checked_at": datetime.now(timezone.utc).isoformat(),
               "checks": {}, "errors": []}
     try:
-        from app import DesktopApi
+        from app import DesktopApi, _InstanceLock, _AlreadyRunning
         from storage import LectureStore
         from integrations import _start_playwright
         with tempfile.TemporaryDirectory(prefix="telecon-smoke-") as temporary:
@@ -90,8 +91,66 @@ def run_portable_check(report_path: Path) -> int:
                                            js_api=api, width=1024, height=760, hidden=sys.platform != "darwin",
                                            background_color="#E6F1FA", text_select=True)
             api._alerts.backend.window = window
+            from tray import TrayManager
+            activation = _InstanceLock(Path(temporary) / "desktop.lock")
+            activation.__enter__()
+            api._tray = TrayManager(window, lambda: dict(api._config), api._request_close, activation=activation)
+            api._tray.attach()
+
+            def wait_for(predicate, description):
+                deadline = time.monotonic() + 12
+                while time.monotonic() < deadline:
+                    if predicate():
+                        return
+                    time.sleep(.05)
+                raise AssertionError(description)
+
+            def check_tray():
+                tray = api._tray
+                state = tray.state()
+                assert state["initialized"], state["error"] or "Native tray did not initialize"
+                report["tray_available"] = state["available"]
+                report["tray_checks"] = {"initialized": True}
+                assert state["menu"] == ["Открыть Телекон", "Выйти"], f"Unexpected native menu: {state['menu']}"
+                report["tray_checks"]["native_menu_layout"] = True
+                # Windows/Linux bridge smoke starts hidden. Exercise minimizing
+                # a real shown window, just as normal application startup does.
+                tray.invoke_menu(0)
+                wait_for(lambda: tray.state()["window_visible"], "Initial native window did not show")
+                saved = api.save_settings({"minimize_to_tray": True, "close_to_tray": True})
+                assert saved["ok"], saved
+                window.minimize()
+                if state["available"]:
+                    wait_for(lambda: tray.state()["hidden"] and not tray.state()["window_visible"],
+                             "Minimize did not hide the actual native window")
+                else:
+                    time.sleep(.5)
+                    assert not tray.state()["hidden"], "Window hidden without an available tray"
+                report["tray_checks"]["minimize_or_safe_fallback"] = True
+                tray.invoke_menu(0)
+                wait_for(lambda: not tray.state()["hidden"] and tray.state()["window_visible"],
+                         "Tray Open did not restore the native window")
+                report["tray_checks"]["restore"] = True
+                window.destroy()  # Same closing event as the window's cross.
+                if state["available"]:
+                    wait_for(lambda: tray.state()["hidden"] and not tray.state()["window_visible"],
+                             "Close did not hide the actual native window")
+                else:
+                    time.sleep(.5)
+                    assert not tray.state()["hidden"]
+                assert not api._closing and not window.events.closed.is_set(), "Close stopped the app instead of hiding"
+                report["tray_checks"]["close_keeps_app_alive"] = True
+                try:
+                    with _InstanceLock(Path(temporary) / "desktop.lock"):
+                        raise AssertionError("A duplicate instance acquired the app lock")
+                except _AlreadyRunning:
+                    pass
+                wait_for(lambda: not tray.state()["hidden"] and tray.state()["window_visible"],
+                         "Second launch did not restore the existing native window")
+                report["tray_checks"]["second_launch_restores"] = True
 
             def check_bridge():
+                menu_checked = False
                 try:
                     if http_server:
                         report["native_ui_http"] = probe_ui_http(window.real_url)
@@ -100,10 +159,13 @@ def run_portable_check(report_path: Path) -> int:
                     assert window.evaluate_js("document.querySelectorAll('[role=tab]').length") == 3
                     assert window.evaluate_js("getComputedStyle(document.documentElement).getPropertyValue('--frost').trim()") == "#E6F1FA"
                     assert window.evaluate_js("Array.from(document.querySelectorAll('input[type=checkbox]')).every(x=>x.getAttribute('role')==='switch')")
+                    check_tray()
                     report["checks"]["native_ui_js_bridge"] = True
+                    menu_checked = True
                 except Exception as error:
                     report["checks"]["native_ui_js_bridge"] = False
                     report["errors"].append(str(error))
+                    report["tray_diagnostics"] = api._tray.state()
                     # Read Python-side events without making another JS bridge
                     # call, which could itself block when bridge setup failed.
                     report["native_ui_diagnostics"] = {
@@ -124,7 +186,19 @@ def run_portable_check(report_path: Path) -> int:
                     except Exception as diagnostic_error:
                         report["diagnostic_error"] = str(diagnostic_error)
                 finally:
-                    window.destroy()
+                    if menu_checked:
+                        try:
+                            # Invoke the actual native Exit item, not the manager
+                            # callback directly. This catches unbound/duplicate
+                            # menu entries in the compiled application.
+                            api._tray.invoke_menu(1)
+                            wait_for(window.events.closed.is_set, "Native tray Exit item did not close the app")
+                        except Exception as error:
+                            report["checks"]["native_ui_js_bridge"] = False
+                            report["errors"].append(str(error))
+                            api._tray.exit()
+                    else:
+                        api._tray.exit()
 
             try:
                 webview.start(check_bridge, gui="qt" if sys.platform == "linux" else None,
@@ -132,6 +206,9 @@ def run_portable_check(report_path: Path) -> int:
             finally:
                 api._alerts.close()
                 api._sleep.close()
+                activation.__exit__()
+            report.setdefault("tray_checks", {})["graceful_exit"] = api._closing and window.events.closed.is_set()
+            assert report["tray_checks"]["graceful_exit"], "Tray Exit did not finish closing the app"
             report["ok"] = len(report["checks"]) == 4 and all(report["checks"].values())
     except Exception as error:
         report["errors"].append(f"{type(error).__name__}: {error}")

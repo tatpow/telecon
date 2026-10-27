@@ -8,7 +8,7 @@ on:
       version:
         description: Release label (existing GitHub releases are never modified)
         required: true
-        default: v0.4.1
+        default: v0.5.0
         type: string
 
 permissions:
@@ -34,9 +34,9 @@ jobs:
             platform: macOS
             arch: x64
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 75
+    timeout-minutes: 110
     env:
-      RELEASE_VERSION: ${{ inputs.version || 'v0.4.1' }}
+      RELEASE_VERSION: ${{ inputs.version || 'v0.5.0' }}
       PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/build/playwright-browsers
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -51,7 +51,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential patchelf xvfb xauth libegl1 libopengl0 libgl1 libxcb-cursor0 libxcb-icccm4 libxcb-keysyms1 libxcb-shape0 libxcb-xinerama0 libxcb-render-util0 libxkbcommon-x11-0
+          sudo apt-get install -y build-essential patchelf rpm desktop-file-utils xvfb xauth libegl1 libopengl0 libgl1 libxcb-cursor0 libxcb-icccm4 libxcb-keysyms1 libxcb-shape0 libxcb-xinerama0 libxcb-render-util0 libxkbcommon-x11-0
       - name: Install Windows dependencies
         if: runner.os == 'Windows'
         run: python -m pip install -r requirements-build.lock.txt
@@ -91,10 +91,54 @@ jobs:
         if: runner.os == 'Windows'
         shell: bash
         run: python build_windows.py --version "$RELEASE_VERSION" --no-hashsum --validation portable
-      - name: Upload checked archives
+      - name: Build Windows installer from the checked package
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $compiler = & ./tools/install_inno_setup.ps1 -Destination (Join-Path $env:RUNNER_TEMP 'telecon-innosetup')
+          python build_installer.py --release-dir "dist/Telecon-Windows-x64-$env:RELEASE_VERSION" --iscc $compiler
+      - name: Test Windows installer, shortcuts and uninstall
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          ./tests/check_installer.ps1 -Setup "dist/Telecon-Windows-x64-$env:RELEASE_VERSION-Setup.exe" -Payload "dist/Telecon-Windows-x64-$env:RELEASE_VERSION" -TestRoot "build/installer-smoke"
+      - name: Build native Linux installers
+        if: runner.os == 'Linux'
+        run: |
+          set -o pipefail
+          python build_posix_installers.py --release-dir "dist/Telecon-Linux-x64-$RELEASE_VERSION" 2>&1 | tee build/installers-build.log
+      - name: Test install, installed UI and removal on Ubuntu and Fedora
+        if: runner.os == 'Linux'
+        run: python tests/check_linux_installers.py --version "$RELEASE_VERSION"
+      - name: Build native macOS DMG and PKG
+        if: runner.os == 'macOS'
+        env:
+          TARGET_ARCH: ${{ matrix.arch }}
+        run: |
+          set -o pipefail
+          python build_posix_installers.py --release-dir "dist/Telecon-macOS-$TARGET_ARCH-$RELEASE_VERSION" 2>&1 | tee build/installers-build.log
+      - name: Test mounted DMG, installed PKG and app removal
+        if: runner.os == 'macOS'
+        env:
+          TARGET_ARCH: ${{ matrix.arch }}
+        run: python tests/check_macos_installers.py --version "$RELEASE_VERSION" --arch "$TARGET_ARCH" --allow-system-install
+      - name: Upload checked installers
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: Telecon-${{ matrix.platform }}-${{ matrix.arch }}-${{ env.RELEASE_VERSION }}
+          name: Installers-${{ matrix.platform }}-${{ matrix.arch }}-${{ env.RELEASE_VERSION }}
+          path: |
+            dist/*-Setup.exe
+            dist/*.deb
+            dist/*.rpm
+            dist/*.dmg
+            dist/*.pkg
+          if-no-files-found: error
+          retention-days: 3
+          compression-level: 0
+      - name: Upload checked portable archives
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: Portable-${{ matrix.platform }}-${{ matrix.arch }}-${{ env.RELEASE_VERSION }}
           path: |
             dist/*.zip
             dist/*.tar.gz
@@ -114,9 +158,13 @@ jobs:
             build/**/macos-app-info.json
             build/**/packaged-smoke.log
             build/source-macos-smoke.json
+            build/installers-build.log
             build/*.threads.log
             dist/**/*.threads.log
             build/**/packaged-*-check.json
             dist/**/SELF-CHECK.json
+            build/installer-smoke/**/*.json
+            build/installer-smoke/**/*.log
+            build/installer-smoke/**/*.threads.log
           if-no-files-found: ignore
           retention-days: 3

@@ -14,9 +14,10 @@ import tarfile
 from pathlib import Path
 
 from build_windows import windows_version
+from version import APP_VERSION
 
 ROOT = Path(__file__).resolve().parent
-DOCUMENTS = ("README.md", "AGENTS.md", "BUILDING.md", "CHECKS.md", "RELEASE_NOTES.md",
+DOCUMENTS = ("README.md", "AGENTS.md", "BUILDING.md", "CHECKS.md",
              "CONTRIBUTING.md", "DESIGN.md", "LICENSE")
 
 
@@ -36,12 +37,14 @@ def compilation_command(system: str, version: str, output: Path) -> list[str]:
     command = [sys.executable, "-m", "nuitka", "--standalone", "--lto=no", "--jobs=4",
                "--assume-yes-for-downloads", "--disable-plugin=pywebview",
                f"--include-module=webview.platforms.{backend}", "--include-package-data=webview",
+               f"--include-module=tray_{backend}",
                "--playwright-include-browser=none", "--include-data-dir=ui=ui",
                "--output-filename=Telecon", f"--output-dir={output}",
                f"--report={output / 'compilation-report.xml'}",
                "--nofollow-import-to=" + ",".join(sorted(
                    {f"webview.platforms.{name}" for name in excluded} |
-                   {"windows_capture", "proctap", "pytest", "IPython"}))]
+                   {"windows_capture", "proctap", "pytest", "IPython"} |
+                   ({"tray_windows", "tray_cocoa", "tray_qt"} - {f"tray_{backend}"})))]
     if system == "darwin":
         command += ["--macos-create-app-bundle", "--macos-app-name=Telecon",
                     "--macos-signed-app-name=ru.tatpow.telecon",
@@ -147,9 +150,21 @@ def copy_licenses(release: Path) -> dict[str, str]:
     return dependencies
 
 
+def bundle_macos_documentation(release: Path, app: Path) -> None:
+    """PKG installs the .app only: include all licenses BEFORE sealing it."""
+    resources = app / "Contents" / "Resources"
+    shutil.copy2(release / "LICENSE", resources / "LICENSE")
+    shutil.copytree(release / "licenses", resources / "third-party-licenses")
+    destination = resources / "telecon-docs"
+    destination.mkdir()
+    for name in DOCUMENTS:
+        shutil.copy2(release / name, destination / name)
+    shutil.copytree(release / "docs", destination / "docs")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--version", default="v0.4.1")
+    parser.add_argument("--version", default=APP_VERSION)
     parser.add_argument("--output-dir", type=Path)
     parser.add_argument("--no-hashsum", action="store_true", help="Accepted for parity; POSIX builds never generate hashes.")
     args = parser.parse_args()
@@ -206,6 +221,7 @@ def main() -> None:
     copy_documentation(release)
     dependencies = copy_licenses(release)
     if sys.platform == "darwin":
+        bundle_macos_documentation(release, app)
         # Re-seal the outer bundle after adding Chromium; retain nested vendor signatures.
         subprocess.run(["codesign", "--force", "--sign", "-", "--timestamp=none",
                         "--preserve-metadata=entitlements,flags", str(app)], check=True)
@@ -234,7 +250,9 @@ def main() -> None:
         "version": args.version, "platform": platform.platform(), "architecture": architecture,
         "python": sys.version, "validation": "portable", "recording_supported": False,
         "recording_checked": False, "developer_id_signed": False,
-        "dependencies": dependencies, "self_check": report["checks"]}, ensure_ascii=False, indent=2), encoding="utf-8")
+        "dependencies": dependencies, "self_check": report["checks"],
+        "tray_available": report.get("tray_available", False),
+        "tray_checks": report.get("tray_checks", {})}, ensure_ascii=False, indent=2), encoding="utf-8")
     (release / "START-HERE.txt").write_text(
         f"Телекон {args.version} · {label} {architecture}\n\n"
         + ("Откройте Telecon.app. Chromium уже находится внутри приложения.\n" if sys.platform == "darwin" else

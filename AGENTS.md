@@ -16,6 +16,8 @@ to change the user's requirements.
   contains the local HTML/CSS/JavaScript interface.
 - `ui_document.py` selects the UI transport and assembles the trusted local
   Cocoa document with per-document CSP nonces.
+- `tray.py` owns window/tray lifecycle; `tray_windows.py`, `tray_cocoa.py` and
+  `tray_qt.py` adapt existing native GUI toolkits without adding a second event loop.
 - `storage.py` owns SQLite persistence and user-data paths.
 - `scheduler.py` claims due lectures and runs one meeting at a time.
 - `integrations.py` owns Playwright/Telemost and the recording lifecycle.
@@ -24,6 +26,8 @@ to change the user's requirements.
 - `video_settings.py` owns video controls, validation and physical monitor dimensions.
 - `notifications.py` owns optional sound, Windows notifications and taskbar badges.
 - `power.py` owns temporary Windows power requests while scheduling/recording.
+- `build_installer.py`, `installer/telecon.iss` and `tools/install_inno_setup.ps1`
+  package a previously checked Windows distribution with pinned Inno Setup.
 - `tests/` contains standard-library `unittest` tests.
 
 Keep meeting automation limited to the user's configured Telemost link and
@@ -103,6 +107,16 @@ buttons or arbitrary consent, login, or organizer dialogs.
 
 ## Validation
 
+### Communication and release copy
+
+Keep the existing concise, user-friendly style. Do not append routine test counts,
+validation summaries, lint/syntax results, or "build/CI was not run" footers to
+user-facing replies, COMMIT_MESSAGE.md or RELEASE_NOTES.md. Record verification
+details in CHECKS.md instead. Mention failures, blockers or material limitations
+when they affect the result, and provide testing details when explicitly requested.
+This is a presentation preference: continue running required checks and never
+claim an unbuilt or unverified distributable was successfully built or tested.
+
 Run tests from this directory with:
 
 ```powershell
@@ -132,8 +146,10 @@ below are reference documentation, not a requirement to execute them every turn.
   C++ runtime DLLs and documentation; the packaged EXE self-check must pass before
   ZIP creation. Checks include camera-dialog recovery, minimizing/restoring capture,
   filename templates, short-video filtering and both deletion modes. No-hashsum
-  builds omit checksum files and source hashes. Include `RELEASE_NOTES.md` in
-  distributions alongside `DESIGN.md`; keep `COMMIT_MESSAGE.md` as a source-side commit description.
+  builds omit checksum files and source hashes. Include `DESIGN.md` in distributions.
+  `COMMIT_MESSAGE.md` and `RELEASE_NOTES.md` are local, gitignored drafts only:
+  never track, force-add or distribute them, and never require them for CI/builds.
+  Link readers to GitHub Releases instead of a repository RELEASE_NOTES.md.
 - Linux: build on Linux using a separate virtual environment, `requirements-build-posix.txt`
   and `python build_desktop.py --version VERSION --no-hashsum`; use Nuitka standalone with its PySide6 plugin. Commands,
   Chromium placement and launch environment are in BUILDING.md. Only UI/calendar/
@@ -146,7 +162,49 @@ below are reference documentation, not a requirement to execute them every turn.
 
 ## Motion, community documentation and CI
 
-- Use the release version requested by the maintainer (current fix release: v0.4.1).
+- Windows Setup must always offer the install directory and selectable Start menu
+  and desktop shortcuts. Use the exact LICENSE from the source checkout, also
+  copied into the app; refuse stale/different payload licenses. Never package real
+  profiles/databases/videos, forcibly close active lectures, or recursively delete
+  user data on uninstall. Test install/uninstall only in a fresh dedicated folder
+  with no existing app registration or shortcuts; preserve unregistered files.
+  Inno Setup is a build-only dependency, verified by publisher signature and staged
+  in portable mode. Keep both the checked ZIP and Setup.exe in Windows CI artifacts.
+
+- Tray behavior is opt-in: `minimize_to_tray` and `close_to_tray` default to false.
+  Hiding the main window must never stop the scheduler, cancel account setup or a
+  lecture, release active power requests, or change capture/meeting visibility.
+  Explicit Exit always uses DesktopApi's graceful shutdown, including finalizing
+  recordings. Keep tray objects/timers on their native GUI thread. Recheck tray
+  availability before hiding and restore the window if the host disappears or both
+  switches are disabled. With no tray host, keep the window in the taskbar.
+  A duplicate launch signals the existing instance via its user-data lock file;
+  never start a second scheduler or require a network port. Packaged portable checks
+  must exercise hide/restore, close, duplicate activation and final Exit. Check
+  actual native menu labels and invoke its real Open/Exit handlers. A minimized
+  native Form with Visible=true is not a successful restore. Never use calls with
+  side effects as augmented-assignment targets (for example Items.Add(...).Click +=)
+  with Nuitka 2.8: the compiled code can evaluate that target twice. Record
+  absent Linux/CI tray hosts as tested fallback, not as a working visible tray.
+
+- Native installers are a second stage after checked payloads: `build_installer.py`
+  creates Windows Setup; `build_posix_installers.py` creates Linux DEB/RPM and
+  macOS DMG/PKG. Never run local release packaging without a current explicit request.
+  Keep defaults in `version.py` and workflow_dispatch synchronized (v0.5.0).
+  Publish separate `Installers-*` and `Portable-*` Actions artifacts only after
+  native installation/runtime/removal checks. Do not publish releases automatically.
+  DEB/RPM own /opt/telecon, a launcher and system menu/icon files; never user homes.
+  Ubuntu 24.04 and Fedora 44 container checks test dependencies and Xvfb, not desktop
+  tray/Wayland or Windows recording. Mint 22.x shares the Ubuntu base but has no
+  dedicated desktop check. Keep the glibc 2.39 baseline explicit.
+  macOS must carry project/vendor licenses and docs inside Resources before codesign;
+  installed app links must remain inside .app. Keep signatures and DMG/PKG checks
+  mandatory; ad-hoc signing is not Developer ID/notarization. Restrict automated
+  /Applications install/removal tests to opted-in disposable GitHub runners and
+  refuse an existing app. Users remove the .app after gracefully exiting it.
+  On all platforms preserve calendars, browser profiles and videos on uninstall.
+
+- Use the release version requested by the maintainer (current release: v0.5.0).
   Animate finite dialog/card/tab
   transitions without replaying unchanged cards on polling. Respect reduced motion
   in JavaScript and CSS, including dialog backdrops; preserve Escape and focus return.
@@ -157,10 +215,12 @@ below are reference documentation, not a requirement to execute them every turn.
   never use personal calendars or generated mockups as proof of the actual UI.
   Keep detailed settings in `docs/USER_GUIDE.md` and contributor guidance in
   `CONTRIBUTING.md`; AI-assisted contributions are welcome with honest verification.
-- `.github/workflows/ci.yml` checks pushes/PRs on native Linux, Windows and both Mac
+- `.github/workflows/ci.yml` checks branch pushes/PRs on native Linux, Windows and both Mac
   architectures. `build.yml` builds on manual dispatch and initial-review branches
   `ci/native-builds-*`. Use read-only permissions, pinned official actions and
-  no secrets, profile data, automatic tags or release publication.
+  no secrets, profile data, automatic tags or release publication. Keep Checks
+  restricted to branch pushes (all branch names), PRs and manual dispatch; creating
+  a release tag must not trigger duplicate unit-check runs.
 - `build_desktop.py` builds natively on Linux x64 / macOS arm64 or x64. Copy Chromium,
   docs, screenshots and licenses; run the packaged `--portable-self-check` before
   creating an archive. Preserve macOS app/framework symlinks and executable modes.

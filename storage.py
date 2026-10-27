@@ -14,6 +14,7 @@ from typing import Iterator, Optional
 from urllib.parse import urlsplit, urlunsplit
 from recording_names import DEFAULT_RECORDING_TEMPLATE, RECORDING_FORMATS
 from video_settings import VIDEO_DEFAULTS, validate_video_settings
+from tray import TRAY_DEFAULTS
 
 
 APP_NAME = "LectureAssistant"
@@ -39,6 +40,7 @@ SETTINGS_DEFAULTS = {
     "prevent_sleep": True,
     **VIDEO_DEFAULTS,
     **ALERT_DEFAULTS,
+    **TRAY_DEFAULTS,
 }
 
 
@@ -108,6 +110,8 @@ def _validate_settings(settings: dict) -> dict:
     validated = dict(settings)
     validate_video_settings(settings, partial=True)
     for key, value in settings.items():
+        if key in TRAY_DEFAULTS and type(value) is not bool:
+            raise ValueError("Сворачивание в трей должно быть включено или выключено.")
         if key == "recording_enabled" and type(value) is not bool:
             raise ValueError("Запись должна быть включена или выключена.")
         if key in ("alert_sound", "alert_notification", "alert_badge") and type(value) is not bool:

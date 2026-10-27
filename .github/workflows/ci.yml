@@ -2,6 +2,7 @@ name: Checks
 
 on:
   push:
+    branches: ['**'] # Branch updates only; publishing a release tag must not repeat Checks.
   pull_request:
   workflow_dispatch:
 
@@ -44,7 +45,7 @@ jobs:
           node --check ui/app.js
           node --check ui/motion.js
       - name: Python syntax
-        run: python -m compileall -q app.py capabilities.py build_desktop.py build_windows.py portable_diagnostics.py
+        run: python -m compileall -q app.py capabilities.py build_desktop.py build_windows.py build_installer.py build_posix_installers.py version.py portable_diagnostics.py ui_document.py tray.py tray_windows.py tray_cocoa.py tray_qt.py tests/check_linux_installers.py tests/check_macos_installers.py
       - name: Install headless Chromium for UI regressions
         if: runner.os == 'Linux'
         run: python -m playwright install --with-deps --only-shell chromium

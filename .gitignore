@@ -204,6 +204,8 @@ cython_debug/
 tempCodeRunnerFile.py
 
 # Local lecture data and verification artifacts
+/COMMIT_MESSAGE.md
+/RELEASE_NOTES.md
 *.sqlite3
 *.sqlite3-*
 .test-tmp/

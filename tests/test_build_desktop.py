@@ -90,6 +90,11 @@ class NativeBuildTests(unittest.TestCase):
         command = compilation_command("darwin", "v0.4.0b", Path("build/native"))
         self.assertIn("--macos-create-app-bundle", command)
         self.assertIn("--include-module=webview.platforms.cocoa", command)
+        self.assertIn("--include-module=tray_cocoa", command)
+        excluded = next(item for item in command if item.startswith("--nofollow-import-to="))
+        self.assertIn("tray_qt", excluded)
+        self.assertIn("tray_windows", excluded)
+        self.assertNotIn("tray_cocoa", excluded)
         self.assertIn("--macos-app-version=0.4.0", command)
         self.assertNotIn("--enable-plugin=pyside6", command)
 
@@ -97,6 +102,11 @@ class NativeBuildTests(unittest.TestCase):
         command = compilation_command("linux", "v0.4.0b", Path("build/native"))
         self.assertIn("--enable-plugin=pyside6", command)
         self.assertIn("--include-module=webview.platforms.qt", command)
+        self.assertIn("--include-module=tray_qt", command)
+        excluded = next(item for item in command if item.startswith("--nofollow-import-to="))
+        self.assertIn("tray_cocoa", excluded)
+        self.assertIn("tray_windows", excluded)
+        self.assertNotIn("tray_qt", excluded)
         self.assertIn("--include-data-dir=ui=ui", command)
         self.assertNotIn("--macos-create-app-bundle", command)
 

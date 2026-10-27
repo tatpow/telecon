@@ -9,6 +9,7 @@ from storage import ALERT_DEFAULTS, Lecture, LectureStore, TELEMOST_HOME_URL, us
 from power import SleepInhibitor
 from notifications import HiddenWindowAlerts
 from capabilities import desktop_capabilities
+from tray import TRAY_DEFAULTS
 
 
 DATE_FORMAT = "%Y-%m-%d %H:%M"
@@ -69,7 +70,8 @@ class DesktopApi:
         self._config = {key: settings[key] for key in (
             "recording_enabled", "ffmpeg_path", "recordings_dir", "prevent_sleep", "default_duration_minutes",
             "minimum_recording_minutes", "recording_name_template", "recording_format",
-            "recording_quality", "recording_fps", "recording_width", "recording_height", *ALERT_DEFAULTS)}
+            "recording_quality", "recording_fps", "recording_width", "recording_height", *ALERT_DEFAULTS, *TRAY_DEFAULTS)}
+        self._tray = None
         self._capabilities = desktop_capabilities()
         if not self._capabilities["recording"]:
             self._config["recording_enabled"] = False
@@ -184,7 +186,9 @@ class DesktopApi:
     def get_settings(self):
         def read():
             with self._lock:
-                return {**self._config, "capabilities": dict(self._capabilities)}
+                return {**self._config, "capabilities": dict(self._capabilities),
+                        "tray": self._tray.state() if self._tray else
+                        {"available": False, "hidden": False, "error": ""}}
         return self._reply(read)
 
     def get_recording_options(self):
@@ -206,7 +210,7 @@ class DesktopApi:
     def save_settings(self, payload):
         def save():
             if not isinstance(payload, dict) or set(payload) - self._config.keys():
-                raise ValueError("Некорректные настройки записи.")
+                raise ValueError("Некорректные настройки приложения.")
             if payload.get("recording_enabled") and not self._capabilities["recording"]:
                 raise ValueError("Запись пока доступна только в Windows. Подключение к лекциям работает без записи.")
             if "recordings_dir" in payload and isinstance(payload["recordings_dir"], str) and payload["recordings_dir"]:
@@ -476,6 +480,7 @@ class _InstanceLock:
     def __init__(self, path: Path):
         self._path = path
         self._file = None
+        self._activation_size = 0
 
     def __enter__(self):
         import os
@@ -494,12 +499,31 @@ class _InstanceLock:
                 import fcntl
                 fcntl.flock(self._file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
         except OSError:
-            self._file.close()
-            raise RuntimeError("Телекон уже открыт. Переключитесь в существующее окно приложения.") from None
+            # Append beyond the locked first byte. The running instance watches
+            # only file length, without executing input or opening a network port.
+            try:
+                self._file.write(b"+")
+                self._file.flush()
+            finally:
+                self._file.close()
+            raise _AlreadyRunning("Телекон уже открыт. Открываем существующее окно.") from None
+        self._file.seek(0, 2)
+        self._activation_size = self._file.tell()
         return self
+
+    def consume(self):
+        self._file.seek(0, 2)
+        size = self._file.tell()
+        changed = size != self._activation_size
+        self._activation_size = size
+        return changed
 
     def __exit__(self, *_):
         self._file.close()
+
+
+class _AlreadyRunning(RuntimeError):
+    pass
 
 
 def ui_file() -> Path:
@@ -515,18 +539,26 @@ def ui_file() -> Path:
 def main() -> None:
     import webview
     from ui_document import ui_window_content
+    from tray import TrayManager
 
     ui = ui_file()
     content, http_server = ui_window_content(ui)
-    with _InstanceLock(user_data_dir() / "desktop.lock"):
-        api = DesktopApi()
-        window = webview.create_window("Телекон — календарь лекций", **content, js_api=api,
-                                       width=1220, height=820, min_size=(820, 600),
-                                       background_color="#E6F1FA", text_select=True)
-        window.events.closing += lambda: api._request_close(window)
-        api._alerts.backend.window = window
-        window.events.closed += api._alerts.close
-        webview.start(http_server=http_server, private_mode=True)
+    try:
+        with _InstanceLock(user_data_dir() / "desktop.lock") as instance:
+            api = DesktopApi()
+            window = webview.create_window("Телекон — календарь лекций", **content, js_api=api,
+                                           width=1220, height=820, min_size=(820, 600),
+                                           background_color="#E6F1FA", text_select=True)
+            def tray_settings():
+                with api._lock:
+                    return {key: api._config[key] for key in TRAY_DEFAULTS}
+            api._tray = TrayManager(window, tray_settings, api._request_close, activation=instance)
+            api._tray.attach()
+            api._alerts.backend.window = window
+            window.events.closed += api._alerts.close
+            webview.start(http_server=http_server, private_mode=True)
+    except _AlreadyRunning:
+        return
 
 
 if __name__ == "__main__":

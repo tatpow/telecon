@@ -13,6 +13,7 @@ import subprocess
 import sys
 import zipfile
 from pathlib import Path
+from version import APP_VERSION
 
 
 ROOT = Path(__file__).resolve().parent
@@ -46,8 +47,10 @@ def stamp_version(executable: Path, label: str, numeric: str) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--version", default="v0.4.1")
+    parser.add_argument("--version", default=APP_VERSION)
     parser.add_argument("--output-dir", type=Path, default=ROOT / "build" / "windows-ffmpeg")
+    parser.add_argument("--dist-dir", type=Path, default=ROOT / "dist",
+                        help="Stage checked distributions here, without replacing an existing test build.")
     parser.add_argument("--skip-compile", action="store_true")
     parser.add_argument("--no-hashsum", action="store_true", help="Omit checksum files and source hashes.")
     parser.add_argument("--validation", choices=("full", "portable"), default="full",
@@ -62,8 +65,8 @@ def main() -> None:
     output = args.output_dir.resolve()
     output.mkdir(parents=True, exist_ok=True)
     release_name = f"Telecon-Windows-x64-{args.version}"
-    release = ROOT / "dist" / release_name
-    archive = ROOT / "dist" / f"{release_name}.zip"
+    release = args.dist_dir.resolve() / release_name
+    archive = args.dist_dir.resolve() / f"{release_name}.zip"
     if release.exists() or archive.exists():
         raise SystemExit(f"Release already exists; choose a new version: {release}")
 
@@ -74,10 +77,11 @@ def main() -> None:
             # Nuitka 2.8's pywebview platform allowlist drops win32.py added
             # in pywebview 6.2.1. Follow Windows imports explicitly instead.
             "--disable-plugin=pywebview", "--include-module=webview.platforms.win32",
+            "--include-module=tray_windows",
             "--playwright-include-browser=none",
             "--include-package=proctap", "--include-module=windows_capture.windows_capture",
             "--include-package=imageio_ffmpeg", "--include-distribution-metadata=proc-tap",
-            "--nofollow-import-to=proctap.backends.linux,proctap.backends.pipewire_native,proctap.backends.macos_*,webview.platforms.android,webview.platforms.cocoa,webview.platforms.gtk,webview.platforms.qt,pytest,IPython",
+            "--nofollow-import-to=tray_cocoa,tray_qt,proctap.backends.linux,proctap.backends.pipewire_native,proctap.backends.macos_*,webview.platforms.android,webview.platforms.cocoa,webview.platforms.gtk,webview.platforms.qt,pytest,IPython",
             "--include-data-dir=ui=ui", "--output-filename=Telecon.exe",
             f"--output-dir={output}", f"--report={output / 'compilation-report.xml'}",
             f"--product-version={numeric_version}", f"--file-version={numeric_version}",
@@ -112,7 +116,7 @@ def main() -> None:
     # Preserve the revision directory expected by the packaged Playwright driver.
     browser_directory = chromium.parent.parent
     shutil.copytree(browser_directory, release / "ms-playwright" / browser_directory.name)
-    for name in ("README.md", "AGENTS.md", "BUILDING.md", "CHECKS.md", "RELEASE_NOTES.md", "CONTRIBUTING.md", "DESIGN.md", "LICENSE"):
+    for name in ("README.md", "AGENTS.md", "BUILDING.md", "CHECKS.md", "CONTRIBUTING.md", "DESIGN.md", "LICENSE"):
         shutil.copy2(ROOT / name, release / name)
     shutil.copytree(ROOT / "docs" / "images", release / "docs" / "images")
     shutil.copy2(ROOT / "docs" / "USER_GUIDE.md", release / "docs" / "USER_GUIDE.md")
@@ -173,10 +177,13 @@ def main() -> None:
                 or portable_checks.get("mode") != "portable"
                 or portable_checks.get("recording_checked") is not False):
             raise SystemExit(f"Packaged portable self-check failed; no archive created: {portable_report}")
+        shutil.copy2(portable_report, release / "PORTABLE-SELF-CHECK.json")
 
     source_files = ["app.py", "diagnostics.py", "integrations.py", "storage.py", "scheduler.py",
                     "recording.py", "recording_names.py", "video_settings.py", "power.py", "notifications.py",
-                    "capabilities.py", "portable_diagnostics.py", "ui_document.py", "ui/index.html", "ui/app.js", "ui/motion.js", "ui/styles.css"]
+                    "capabilities.py", "portable_diagnostics.py", "ui_document.py", "tray.py",
+                    "tray_windows.py", "tray_cocoa.py", "tray_qt.py", "ui/tray.png", "ui/tray.ico",
+                    "ui/index.html", "ui/app.js", "ui/motion.js", "ui/styles.css"]
     manifest = {
         "version": args.version, "windows_version": numeric_version,
         "validation": args.validation, "recording_checked": args.validation == "full",
@@ -184,6 +191,8 @@ def main() -> None:
         "dependencies": {name: importlib.metadata.version(name) for name in packages + ["Nuitka"]},
         "self_check": checks["checks"],
         "portable_self_check": portable_checks["checks"],
+        "tray_available": portable_checks.get("tray_available", False),
+        "tray_checks": portable_checks.get("tray_checks", {}),
     }
     if not args.no_hashsum:
         manifest["source_sha256"] = {name: hashlib.sha256((ROOT / name).read_bytes()).hexdigest() for name in source_files}
