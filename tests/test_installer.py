@@ -12,7 +12,7 @@ class InstallerTests(unittest.TestCase):
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
-        self.release = self.root / "application"
+        self.release = self.root / "application with spaces"
         (self.release / "ui").mkdir(parents=True)
         (self.release / "Telecon.exe").write_bytes(b"MZ fixture")
         (self.release / "ui/tray.ico").write_bytes(b"icon fixture")
@@ -61,11 +61,22 @@ class InstallerTests(unittest.TestCase):
         self.assertEqual(existing.read_bytes(), b"keep")
 
     def test_paths_with_spaces_are_passed_as_single_compiler_arguments(self):
-        output = self.root / "installer output"
-        def compile(command, **kwargs):
-            self.assertIn(f"/DPayloadDir={self.release}", command)
-            self.assertIn(f"/DInstallerDir={output}", command)
-            self.assertIn("/DReleaseVersion=v0.4.1", command)
-            (output / "Telecon-Windows-x64-v0.4.1-Setup.exe").write_bytes(b"MZ fixture")
-        with patch("build_installer.subprocess.run", side_effect=compile):
-            self.assertTrue(create_installer(self.release, output, Path("ISCC.exe")).is_file())
+        # CI temp paths can be aliases: /var -> /private/var on macOS and
+        # RUNNER~1 -> runneradmin on Windows. Exercise an alias on every host.
+        alias = self.root / "temporary path alias"
+        alias.symlink_to(self.root.resolve(), target_is_directory=True)
+        for index, base in enumerate((self.root, alias)):
+            with self.subTest(alias=index == 1):
+                release = base / self.release.name
+                output = base / f"installer output {index}"
+
+                def compile(command, **kwargs):
+                    self.assertIn(f"/DPayloadDir={release.resolve()}", command)
+                    self.assertIn(f"/DInstallerDir={output.resolve()}", command)
+                    self.assertIn("/DReleaseVersion=v0.4.1", command)
+                    (output / "Telecon-Windows-x64-v0.4.1-Setup.exe").write_bytes(b"MZ fixture")
+
+                with patch("build_installer.subprocess.run", side_effect=compile):
+                    result = create_installer(release, output, Path("ISCC.exe"))
+                self.assertTrue(result.is_file())
+                self.assertEqual(result.parent, output.resolve())
