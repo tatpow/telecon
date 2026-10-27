@@ -1,5 +1,38 @@
 # Проверки Телекона
 
+## Linux packaged smoke: HTTP listener startup — 27 октября 2026
+
+- В присланном логе Nuitka успешно создаёт `app.dist/Telecon`, календарь и Chromium
+  проходят. Проверка HTTP получает `[Errno 111] Connection refused` до before_show.
+- Исходники установленного pywebview 6.2.1 подтверждают порядок: BottleServer
+  запускает поток и выставляет running=true до bind/listen; webview.start запускает
+  callback проверки до guilib.create_window. Немедленный probe мог опередить сервер.
+- HTTP probe ожидает listener не более 15 секунд, повторяя только ConnectionRefusedError.
+  Проверка документа, запрет переходов, native UI и настоящий JS bridge сохранены.
+  Незапущенный сервер, неверная страница, сброс/таймаут соединения остаются ошибками.
+- Локально прошли 240 unit-тестов, включая готовность после отказа, исчерпание
+  deadline и отсутствие повторов для других ошибок. Лог: `build/checks-http-startup.log`.
+  Linux-бинарник здесь не пересобирался, новый нативный результат должен подтвердить CI.
+
+## Cocoa: сворачивание и корректный выход — 27 октября 2026
+
+- Прочитаны оба diagnostics-артефакта запуска Actions `40545397721`, коммит
+  `5736bd4`. На arm64/x64 календарь, Chromium и загрузка inline UI проходят;
+  одинаковые ошибки: `Minimize did not hide the actual native window` и
+  `Tray Exit did not finish closing the app`. Native bridge инъецирован и loaded=true.
+- В подготовке smoke уже видимое окно Cocoa получало отложенный Open; ожидание
+  уже истинной видимости не дожидалось его выполнения. Он мог отменить следующий
+  minimize. Избыточная подготовительная команда убрана; настоящие Open/Exit
+  после сворачивания и закрытия остаются обязательными.
+- pywebview 6.2.1 в Cocoa вызывает NSWindow.close() из destroy(), обходя
+  windowShouldClose_. Новый request_window_close использует main-loop performClose_,
+  сохраняя graceful cleanup и отменяемое закрытие. Используется для Exit,
+  завершения фоновой очистки и имитации крестика в smoke.
+- Локально прошли 237 unit-тестов; добавлены регрессии очереди Open, Cocoa close
+  delegate с ожиданием cleanup и печати JSON ошибки в stderr. Лог:
+  `build/checks-cocoa-tray-close.log`. Нативное подтверждение macOS остаётся в CI;
+  проверки не отключались, релизная сборка и Actions здесь не запускались.
+
 ## Исправление CI: альтернативные пути временной папки — 27 октября 2026
 
 - Во всех трёх присланных логах падал один тест Windows-упаковщика: он ожидал

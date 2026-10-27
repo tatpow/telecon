@@ -13,22 +13,41 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 
-def probe_ui_http(url: str) -> dict:
+def prepare_smoke_window(tray, wait_for, *, initially_hidden: bool) -> None:
+    # Cocoa is already shown. Queuing Open there and waiting on an already-true
+    # visibility flag lets that delayed Open undo the following minimize.
+    # Open itself is still exercised after minimize and close on every platform.
+    if initially_hidden:
+        tray.invoke_menu(0)
+    wait_for(lambda: tray.state()["window_visible"], "Initial native window did not show")
+
+
+def probe_ui_http(url: str, *, startup_timeout: float = 0) -> dict:
     """Read only the local UI page; never contact a remote or proxied origin."""
     target = urlsplit(url)
     if target.scheme != "http" or target.hostname != "127.0.0.1" or target.username or target.password:
         raise ValueError("Native smoke-check requires a loopback HTTP UI URL")
-    connection = HTTPConnection(target.hostname, target.port or 80, timeout=5)
-    try:
-        path = (target.path or "/") + ("?" + target.query if target.query else "")
-        connection.request("GET", path)
-        response = connection.getresponse()
-        content = response.read(1024 * 1024).decode("utf-8")
-        if response.status != 200 or '<html lang="ru">' not in content or 'src="app.js"' not in content:
-            raise RuntimeError("Local server did not return the bundled UI document")
-        return {"status": response.status, "content_type": response.headers.get_content_type()}
-    finally:
-        connection.close()
+    deadline = time.monotonic() + startup_timeout
+    while True:
+        connection = HTTPConnection(target.hostname, target.port or 80, timeout=5)
+        try:
+            path = (target.path or "/") + ("?" + target.query if target.query else "")
+            connection.request("GET", path)
+            response = connection.getresponse()
+            content = response.read(1024 * 1024).decode("utf-8")
+            if response.status != 200 or '<html lang="ru">' not in content or 'src="app.js"' not in content:
+                raise RuntimeError("Local server did not return the bundled UI document")
+            return {"status": response.status, "content_type": response.headers.get_content_type()}
+        except ConnectionRefusedError:
+            # BottleServer.running becomes true before its background thread
+            # binds/listens; webview.start also starts this probe before the GUI.
+            # Retry only startup refusal, never wrong pages, redirects or HTTP errors.
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise
+        finally:
+            connection.close()
+        time.sleep(min(.05, remaining))
 
 
 def run_portable_check(report_path: Path) -> int:
@@ -87,11 +106,12 @@ def run_portable_check(report_path: Path) -> int:
             content, http_server = ui_window_content(ui_path)
             report["native_ui_mode"] = "http" if http_server else "inline"
             called.clear()
+            initially_hidden = sys.platform != "darwin"
             window = webview.create_window("Телекон — проверка интерфейса", **content,
-                                           js_api=api, width=1024, height=760, hidden=sys.platform != "darwin",
+                                           js_api=api, width=1024, height=760, hidden=initially_hidden,
                                            background_color="#E6F1FA", text_select=True)
             api._alerts.backend.window = window
-            from tray import TrayManager
+            from tray import TrayManager, request_window_close
             activation = _InstanceLock(Path(temporary) / "desktop.lock")
             activation.__enter__()
             api._tray = TrayManager(window, lambda: dict(api._config), api._request_close, activation=activation)
@@ -115,8 +135,7 @@ def run_portable_check(report_path: Path) -> int:
                 report["tray_checks"]["native_menu_layout"] = True
                 # Windows/Linux bridge smoke starts hidden. Exercise minimizing
                 # a real shown window, just as normal application startup does.
-                tray.invoke_menu(0)
-                wait_for(lambda: tray.state()["window_visible"], "Initial native window did not show")
+                prepare_smoke_window(tray, wait_for, initially_hidden=initially_hidden)
                 saved = api.save_settings({"minimize_to_tray": True, "close_to_tray": True})
                 assert saved["ok"], saved
                 window.minimize()
@@ -131,7 +150,7 @@ def run_portable_check(report_path: Path) -> int:
                 wait_for(lambda: not tray.state()["hidden"] and tray.state()["window_visible"],
                          "Tray Open did not restore the native window")
                 report["tray_checks"]["restore"] = True
-                window.destroy()  # Same closing event as the window's cross.
+                request_window_close(window)  # Same cancellable native request as the window's cross.
                 if state["available"]:
                     wait_for(lambda: tray.state()["hidden"] and not tray.state()["window_visible"],
                              "Close did not hide the actual native window")
@@ -153,7 +172,7 @@ def run_portable_check(report_path: Path) -> int:
                 menu_checked = False
                 try:
                     if http_server:
-                        report["native_ui_http"] = probe_ui_http(window.real_url)
+                        report["native_ui_http"] = probe_ui_http(window.real_url, startup_timeout=15)
                     assert called.wait(35), "Native UI did not call the Python bridge"
                     assert window.evaluate_js("typeof motion.open === 'function'")
                     assert window.evaluate_js("document.querySelectorAll('[role=tab]').length") == 3
@@ -214,4 +233,6 @@ def run_portable_check(report_path: Path) -> int:
         report["errors"].append(f"{type(error).__name__}: {error}")
     report_path.parent.mkdir(parents=True, exist_ok=True)
     report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+    if not report["ok"]:
+        print(json.dumps(report, ensure_ascii=False, indent=2), file=sys.stderr, flush=True)
     return 0 if report["ok"] else 1

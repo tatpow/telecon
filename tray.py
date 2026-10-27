@@ -14,6 +14,20 @@ import threading
 TRAY_DEFAULTS = {"minimize_to_tray": False, "close_to_tray": False}
 
 
+def request_window_close(window):
+    """Use the native close request, including Cocoa's cancellable delegate.
+
+    pywebview 6.2.1's Cocoa destroy() calls NSWindow.close(), which bypasses
+    windowShouldClose_ and therefore our graceful session cleanup. Marshal
+    performClose_ to the main loop even when tray initialization has failed.
+    """
+    if sys.platform == "darwin":
+        from PyObjCTools import AppHelper
+        AppHelper.callAfter(window.native.performClose_, None)
+    else:
+        window.destroy()
+
+
 class TrayManager:
     def __init__(self, window, settings, request_close, *, backend_factory=None, activation=None):
         self.window = window
@@ -76,9 +90,8 @@ class TrayManager:
             if self._quitting:
                 return
             self._quitting = True
-        # pywebview marshals destroy onto its native GUI loop. This also works
-        # when tray initialization failed and no native timer could be started.
-        self.window.destroy()
+        # This must also work without an initialized backend/native tray timer.
+        request_window_close(self.window)
 
     def on_minimized(self):
         self._commands.put("minimize")

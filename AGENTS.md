@@ -172,6 +172,13 @@ below are reference documentation, not a requirement to execute them every turn.
   in portable mode. Keep both the checked ZIP and Setup.exe in Windows CI artifacts.
 
 - Tray behavior is opt-in: `minimize_to_tray` and `close_to_tray` default to false.
+  On Cocoa use `tray.request_window_close` for Exit, deferred cleanup and simulated
+  window-cross requests: it marshals NSWindow.performClose_ onto the main loop.
+  pywebview 6.2.1 destroy()/NSWindow.close() bypasses windowShouldClose_ and must not
+  bypass cancellation/finalization. Keep this working when tray initialization fails.
+  Cocoa smoke windows start shown: never enqueue a redundant initial Open while
+  waiting on an already-true visibility flag, or it can undo the next minimize.
+  Still exercise real native Open after minimize/close and actual Exit on every OS.
   Hiding the main window must never stop the scheduler, cancel account setup or a
   lecture, release active power requests, or change capture/meeting visibility.
   Explicit Exit always uses DesktopApi's graceful shutdown, including finalizing
@@ -252,4 +259,8 @@ below are reference documentation, not a requirement to execute them every turn.
   CI checks Cocoa from source before compilation and again in the packaged app.
   Keep all four real checks mandatory, including the actual Python/JS bridge.
   Save lifecycle state and thread traces on failure; check the local HTTP document
-  only for platforms that use HTTP. Never bypass a failing native check.
+  only for platforms that use HTTP. pywebview's BottleServer.running flag precedes
+  the actual listener: allow a bounded startup retry on loopback ConnectionRefusedError,
+  still requiring HTTP 200, the bundled document and the real native JS bridge.
+  Never retry redirects/wrong documents or turn an unavailable server into success.
+  Never bypass a failing native check.

@@ -260,7 +260,10 @@ class DesktopApiTests(unittest.TestCase):
     def test_manual_join_uses_settings_and_cancel_cleans_up_before_close(self):
         import threading
         from app import DesktopApi
-        from unittest.mock import Mock
+        from unittest.mock import Mock, patch
+        close_dispatch = patch("app.request_window_close", side_effect=lambda window: window.destroy())
+        close_dispatch.start()
+        self.addCleanup(close_dispatch.stop)
         started, released = threading.Event(), threading.Event()
         captured = []
         def runner(lecture, config, *, cancel_event, status_callback):
@@ -296,12 +299,13 @@ class DesktopApiTests(unittest.TestCase):
         import threading
         import types
         from unittest.mock import Mock, patch
-        started, cleaned = threading.Event(), threading.Event()
+        started, cleaned, close_requested = threading.Event(), threading.Event(), threading.Event()
         def prepare(url, *, cancel_event, status_callback):
             started.set()
             cancel_event.wait(3)
             cleaned.set()
-        with patch.dict(sys.modules, {"integrations": types.SimpleNamespace(prepare_browser_profile=prepare)}):
+        with (patch.dict(sys.modules, {"integrations": types.SimpleNamespace(prepare_browser_profile=prepare)}),
+              patch("app.request_window_close", side_effect=lambda _: close_requested.set())):
             self.assertFalse(self.api.prepare_account({"url": "https://example.org"})["ok"])
             self.assertTrue(self.api.prepare_account({"url": "https://telemost.yandex.ru/"})["ok"])
             self.assertTrue(started.wait(2))
@@ -311,6 +315,7 @@ class DesktopApiTests(unittest.TestCase):
             self.api._request_close(Mock())
             self.assertTrue(cleaned.wait(2))
             self.api._account_thread.join(2)
+            self.assertTrue(close_requested.wait(2))
 
     def test_app_import_needs_neither_gui_nor_integrations(self):
         import subprocess

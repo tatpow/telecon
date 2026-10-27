@@ -9,7 +9,7 @@ from storage import ALERT_DEFAULTS, Lecture, LectureStore, TELEMOST_HOME_URL, us
 from power import SleepInhibitor
 from notifications import HiddenWindowAlerts
 from capabilities import desktop_capabilities
-from tray import TRAY_DEFAULTS
+from tray import TRAY_DEFAULTS, request_window_close
 
 
 DATE_FORMAT = "%Y-%m-%d %H:%M"
@@ -469,7 +469,7 @@ class DesktopApi:
             with self._lock:
                 self._close_allowed = True
                 self._sleep.close()
-            window.destroy()
+            request_window_close(window)
         threading.Thread(target=cleanup, name="close-recording", daemon=True).start()
         return False
 

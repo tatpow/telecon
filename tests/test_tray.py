@@ -1,11 +1,12 @@
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
+from types import SimpleNamespace
 
 from app import DesktopApi, _InstanceLock
 from storage import LectureStore
-from tray import TrayManager, TRAY_DEFAULTS
+from tray import TrayManager, TRAY_DEFAULTS, request_window_close
 
 
 class TrayTests(unittest.TestCase):
@@ -58,7 +59,8 @@ class TrayTests(unittest.TestCase):
         self.settings["close_to_tray"] = True
         self.close.return_value = False  # Active recording still finalizes.
         self.window.destroy.side_effect = self.manager.on_closing
-        self.manager.exit()
+        with patch("tray.request_window_close", side_effect=lambda window: window.destroy()):
+            self.manager.exit()
         self.close.assert_called_once_with(self.window)
         self.backend.stop.assert_not_called()
         self.close.return_value = True
@@ -130,8 +132,30 @@ class TrayTests(unittest.TestCase):
         manager.start()
         self.assertFalse(manager.state()["initialized"])
         self.assertIn("missing icon", manager.state()["error"])
-        manager.exit()
-        self.window.destroy.assert_called_once()
+        with patch("tray.request_window_close") as close_window:
+            manager.exit()
+        close_window.assert_called_once_with(self.window)
+
+    def test_cocoa_exit_uses_main_loop_close_delegate_and_waits_for_cleanup(self):
+        self.settings["close_to_tray"] = True
+        self.close.return_value = False
+        self.window.native.performClose_.side_effect = lambda _: self.manager.on_closing()
+        helper = SimpleNamespace(callAfter=Mock())
+        with patch("tray.sys.platform", "darwin"), patch.dict("sys.modules", {
+                "PyObjCTools": SimpleNamespace(AppHelper=helper)}):
+            self.manager.exit()
+            helper.callAfter.assert_called_once_with(self.window.native.performClose_, None)
+            self.close.assert_not_called()  # Still on the requesting thread.
+            callback, sender = helper.callAfter.call_args.args
+            self.assertFalse(callback(sender))  # The native delegate cancels closing during cleanup.
+            self.backend.stop.assert_not_called()
+            self.close.return_value = True
+            request_window_close(self.window)  # Cleanup requests the final close through the same delegate.
+            callback, sender = helper.callAfter.call_args.args
+            self.assertTrue(callback(sender))
+        self.backend.stop.assert_called_once()
+        self.window.destroy.assert_not_called()
+        self.window.hide.assert_not_called()
 
     def test_second_instance_requests_restore_without_network_or_new_scheduler(self):
         with tempfile.TemporaryDirectory() as directory:
