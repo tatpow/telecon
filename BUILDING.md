@@ -35,7 +35,7 @@ Mint 22.x использует базу Ubuntu 24.04; отдельный Mint de
 
 ```bash
 sudo apt-get update
-sudo apt-get install -y python3.12 python3.12-venv python3.12-dev build-essential patchelf xvfb xauth libegl1 libopengl0 libgl1 libxcb-cursor0 libxcb-icccm4 libxcb-keysyms1 libxcb-shape0 libxcb-xinerama0 libxcb-render-util0 libxkbcommon-x11-0
+sudo apt-get install -y python3.12 python3.12-venv python3.12-dev build-essential patchelf xvfb xauth libatomic1 libegl1 libopengl0 libgl1 libxcb-cursor0 libxcb-icccm4 libxcb-keysyms1 libxcb-shape0 libxcb-xinerama0 libxcb-render-util0 libxkbcommon-x11-0
 ```
 
 Затем выполните общий раздел «Окружение и сборка Linux».
@@ -55,7 +55,7 @@ sudo apt-get install -y python3.12 python3.12-venv python3.12-dev build-essentia
 Установите отдельный Python 3.12 и инструменты:
 
 ```bash
-sudo dnf install -y python3.12 python3.12-devel gcc gcc-c++ make patchelf libglvnd-glx libglvnd-egl mesa-libGL mesa-libEGL libxcb xcb-util-cursor xcb-util-wm xcb-util-keysyms xcb-util-image xcb-util-renderutil libxkbcommon-x11 nss alsa-lib libXcomposite libXdamage libXrandr libXtst libXScrnSaver cups-libs
+sudo dnf install -y python3.12 python3.12-devel gcc gcc-c++ make patchelf libatomic libglvnd-glx libglvnd-egl mesa-libGL mesa-libEGL libxcb xcb-util-cursor xcb-util-wm xcb-util-keysyms xcb-util-image xcb-util-renderutil libxkbcommon-x11 nss alsa-lib libXcomposite libXdamage libXrandr libXtst libXScrnSaver cups-libs
 ```
 
 Fedora предоставляет [несколько версий Python параллельно](https://developer.fedoraproject.org/tech/languages/python/multiple-pythons.html).
@@ -118,8 +118,9 @@ Fedora нужны `rpm-build dpkg desktop-file-utils` и отдельно Docker
 Результат: `Telecon-Linux-x64-v0.5.0.deb` и `.rpm` в `dist/`.
 Приложение устанавливается в `/opt/telecon`, команда запуска — `/usr/bin/telecon`,
 ярлык — в общем меню приложений. Для произвольной папки используйте TAR.GZ.
-Пакеты явно объявляют Qt/Chromium-зависимости и glibc ≥ 2.39:
-цели текущего CI — Ubuntu 24.04, Mint 22.x и Fedora 44 x64.
+Пакеты явно объявляют Qt/Chromium-зависимости и glibc ≥ 2.39.
+Для загрузки QtWebEngine нужны `libatomic1` в DEB и `libatomic` в RPM.
+Цели текущего CI — Ubuntu 24.04, Mint 22.x и Fedora 44 x64.
 Пакетный менеджер удаляет файлы приложения и ярлык, сохраняя домашний каталог,
 календарь, профиль и записи. Нет скриптов удаления пользовательских данных.
 RPM не переписывает/не strip-ит уже проверенные бинарники и не экспортирует

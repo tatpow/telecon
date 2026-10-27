@@ -201,6 +201,8 @@ below are reference documentation, not a requirement to execute them every turn.
   Publish separate `Installers-*` and `Portable-*` Actions artifacts only after
   native installation/runtime/removal checks. Do not publish releases automatically.
   DEB/RPM own /opt/telecon, a launcher and system menu/icon files; never user homes.
+  Declare QtWebEngine's libatomic.so.1 dependency in the packages (DEB libatomic1,
+  RPM libatomic); never mask missing runtime dependencies by adding them only to QA containers.
   Ubuntu 24.04 and Fedora 44 container checks test dependencies and Xvfb, not desktop
   tray/Wayland or Windows recording. Mint 22.x shares the Ubuntu base but has no
   dedicated desktop check. Keep the glibc 2.39 baseline explicit.

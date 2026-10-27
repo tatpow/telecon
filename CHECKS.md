@@ -1,5 +1,17 @@
 # Проверки Телекона
 
+## Linux installers: libatomic.so.1 — 27 октября 2026
+
+- В присланном логе DEB успешно устанавливается в чистом Ubuntu-контейнере,
+  Chromium запускается. QtWebEngineCore не загружается: `libatomic.so.1` отсутствует.
+  Последующие ошибки PyQt5/GTK — запасные попытки pywebview после отказа PySide6.
+- Добавлены системные зависимости в метаданные самих пакетов: `libatomic1`
+  в DEB и `libatomic` в RPM. QA-контейнеры не получают библиотеку отдельной командой,
+  поэтому продолжают выявлять ошибки зависимостей установщика.
+- В проверку генерируемых Depends/Requires добавлена регрессия. Локально прошли
+  12 installer-тестов и все 240 unit-тестов; лог `build/checks-linux-libatomic.log`.
+  Нативная проверка обновлённых пакетов остаётся в GitHub Actions.
+
 ## Linux packaged smoke: HTTP listener startup — 27 октября 2026
 
 - В присланном логе Nuitka успешно создаёт `app.dist/Telecon`, календарь и Chromium

@@ -21,7 +21,7 @@ ROOT = Path(__file__).resolve().parent
 CORE_CHECKS = {"connection_default", "temporary_calendar_crud", "chromium_launch", "native_ui_js_bridge"}
 TRAY_CHECKS = {"native_menu_layout", "restore", "graceful_exit"}
 DEB_DEPENDS = (
-    "libc6 (>= 2.39)", "libstdc++6", "libgcc-s1", "zlib1g", "libasound2t64",
+    "libc6 (>= 2.39)", "libstdc++6", "libgcc-s1", "libatomic1", "zlib1g", "libasound2t64",
     "libatk1.0-0t64", "libatk-bridge2.0-0t64", "libatspi2.0-0t64", "libcairo2",
     "libcups2t64", "libdbus-1-3", "libdrm2", "libgbm1", "libglib2.0-0t64",
     "libnspr4", "libnss3", "libpango-1.0-0", "libx11-6", "libx11-xcb1", "libxcb1",
@@ -32,7 +32,7 @@ DEB_DEPENDS = (
     "libxcb-image0", "libxcb-xkb1", "libxkbcommon-x11-0", "libgtk-3-0t64",
     "libfontconfig1", "libfreetype6", "fonts-liberation")
 RPM_DEPENDS = (
-    "glibc >= 2.39", "libstdc++", "libgcc", "zlib", "alsa-lib", "atk", "at-spi2-atk",
+    "glibc >= 2.39", "libstdc++", "libgcc", "libatomic", "zlib", "alsa-lib", "atk", "at-spi2-atk",
     "at-spi2-core", "cairo", "cups-libs", "dbus-libs", "libdrm", "mesa-libgbm", "glib2",
     "nspr", "nss", "pango", "libX11", "libxcb", "libXcomposite", "libXdamage", "libXext",
     "libXfixes", "libXrandr", "libXrender", "libXcursor", "libXi", "libXtst", "libXScrnSaver",
